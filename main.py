@@ -1,650 +1,793 @@
-from sklearn import ensemble
-from sklearn import metrics
-import itertools as it
-#import seaborn as sns
-#import matplotlib.pyplot as plt
+"""ABS-EE reporting and analysis layer.
 
-class const():
+Operates on the enriched DataFrames produced by ``autoLoanParser`` (or by
+``autoLeaseParser`` followed by ``autoLeaseParser.fit_reporting_model`` to
+align lease column names with the loan schema). Produces:
+
+  * ``create_summary``           — stratified roll-up across the standard cuts
+  * ``create_comparison``        — one-row-per-securitization summary
+  * ``create_performance``       — performance time-series by axis (vintage / age / month)
+  * ``create_curves``            — life-of-deal balance curves by prime tier
+  * ``create_rollrates_matrix``  — single delinquency-state transition matrix
+  * ``create_rollrates_ts``      — time-series of roll-rates by axis
+  * ``describe_data``            — per-securitization describe()
+
+Optional (require matplotlib/seaborn/sklearn — lazy-imported on use):
+  * ``plot_performance``, ``plot_model_outputs``
+  * ``create_heatmap``, ``plot_heatmaps``, ``run_heatmaps``
+"""
+from __future__ import annotations
+
+import itertools as it
+import logging
+from typing import Iterable
+
+import numpy as np
+import numpy_financial as npf
+import pandas as pd
+
+log = logging.getLogger("absee.reporting")
+
+
+class const:
     @staticmethod
     def summaryRowHeader():
-        return ['No of Loans', 'Avg Prin Bal $', 'Avg Prin Bal %', 'Avg Loan Size $','BaseR / MSRP %','DBaseR / Sec %',
-                'Total TurnIn %','Total Gain/Loss Sale %','Total Def %','Total PP %','Total Delq %','Delq 1m %','Delq 2m %',
-                'Delq 3m %','Delq 3m+ %','Def %','PP %','Inc Ver %','Emp Ver %','WAVG APR %',
-                'WAVG LTV %', 'WAVG Term m', 'WAVG Age m','WAVG MFC m','WAVG PTI %','WAVG Cons Score',
-                'WAVG Comm Score','Cons %','Comm %','Used %', 'New %','Car %','Truck %',
-                'SUV %','<2010 %','<2015 %','2015 %','2016 %','2017 %','CA %','TX %',
-                'FL %','OH %','NJ %']
+        return ['No of Loans', 'Avg Prin Bal $', 'Avg Prin Bal %', 'Avg Loan Size $',
+                'BaseR / MSRP %', 'DBaseR / Sec %', 'Total TurnIn %',
+                'Total Gain/Loss Sale %', 'Total Def %', 'Total PP %', 'Total Delq %',
+                'Delq 1m %', 'Delq 2m %', 'Delq 3m %', 'Delq 3m+ %', 'Def %', 'PP %',
+                'Inc Ver %', 'Emp Ver %', 'WAVG APR %', 'WAVG LTV %', 'WAVG Term m',
+                'WAVG Age m', 'WAVG MFC m', 'WAVG PTI %', 'WAVG Cons Score',
+                'WAVG Comm Score', 'Cons %', 'Comm %', 'Used %', 'New %', 'Car %',
+                'Truck %', 'SUV %', '<2010 %', '<2015 %', '2015 %', '2016 %', '2017 %',
+                'CA %', 'TX %', 'FL %', 'OH %', 'NJ %']
+
     @staticmethod
-    def intNo():
-        return 7
+    def intNo(): return 7
     @staticmethod
     def rrCols():
-        return ['Curr','1m','2m','3m','3m+','CO','PP']
+        return ['Curr', '1m', '2m', '3m', '3m+', 'CO', 'PP']
     @staticmethod
-    def featTolerance():
-        return 10
+    def featTolerance(): return 10
     @staticmethod
-    def maxTrees():
-        return 200
+    def maxTrees(): return 200
     @staticmethod
-    def maxDepth():
-        return None
+    def maxDepth(): return None
     @staticmethod
-    def maxLeaf():
-        return 1
+    def maxLeaf(): return 1
+
     @staticmethod
     def modelFields():
-        return ['gracePeriodNumber','obligorEmploymentVerificationCode','region','obligorIncomeVerificationLevelCode',
-                'originalInterestRatePercentage','originalLoanAmount','originalLoanTerm','paymentToIncomePercentage',
-                'remainingTermToMaturityNumber','servicingAdvanceMethodCode','servicingFeePercentage','underwritingIndicator',
-                'vehicleManufacturerName','vehicleModelYear','vehicleNewUsedCode','vehicleTypeCode','vehicleValueAmount','vehicleValueSourceCode',
-                'consumerCreditScore','commercialCreditScore','age','loanToValueRatio','vintage','primeIndicator']
-                # 'modificationTypeCode','subvented','vehicleModelName','originalInterestOnlyTermNumber',,'obligorGeographicLocation'
+        return ['gracePeriodNumber', 'obligorEmploymentVerificationCode', 'region',
+                'obligorIncomeVerificationLevelCode', 'originalInterestRatePercentage',
+                'originalLoanAmount', 'originalLoanTerm', 'paymentToIncomePercentage',
+                'remainingTermToMaturityNumber', 'servicingAdvanceMethodCode',
+                'servicingFeePercentage', 'underwritingIndicator',
+                'vehicleManufacturerName', 'vehicleModelYear', 'vehicleNewUsedCode',
+                'vehicleTypeCode', 'vehicleValueAmount', 'vehicleValueSourceCode',
+                'consumerCreditScore', 'commercialCreditScore', 'age',
+                'loanToValueRatio', 'vintage', 'primeIndicator']
+
     @staticmethod
-    def frac():
-        return .2
+    def frac(): return .2
+
     @staticmethod
     def badFields():
-        return np.array(['commercialCreditScore','obligorEmploymentVerificationCode','gracePeriodNumber',
-                         'obligorIncomeVerificationCode','gracePeriodNumber','servicingFeePercentage',
-                         'vehicleManufacturerName'])
-
-def WAVG(dtPmts,fieldStr,weightStr):
-# Desc: Creates a weighted average where the averaging field and the weighting fields are specified in a pandas dataframe
-
-    return np.multiply(dtPmts[fieldStr],dtPmts[weightStr]).sum() / dtPmts[weightStr].sum()
-
-def create_summary_row(dtPmts,rowName):
-
-    #rowName = 'Term 0-20'
-    if (dtPmts.shape[0] > 0):
-
-        dtRow = pd.DataFrame(data=np.zeros(shape=(1,len(const.summaryRowHeader()))),index=[rowName.title()],
-                                 columns=const.summaryRowHeader())
-
-        firstIndx = np.where(dtPmts['monthsFromCutoffDate'] == 0)
-        dtRow['Total Def %'].iloc[0] = dtPmts['chargedoffPrincipalAmount'].sum() / dtPmts['reportingPeriodBeginningLoanBalanceAmount'].iloc[firstIndx].sum()
-        dtRow['Total PP %'].iloc[0] = dtPmts['principalPrepaid'].sum() / dtPmts['reportingPeriodBeginningLoanBalanceAmount'].iloc[firstIndx].sum()
-
-        dtP = dtPmts.iloc[np.where(dtPmts['summaryDate'] == 1)]
-
-        dtRow['No of Loans'].iloc[0] = dtP.shape[0]
-        dtRow['Avg Prin Bal $'].iloc[0] = dtP['reportingPeriodActualEndBalanceAmount'].mean()
-        dtRow['Avg Prin Bal %'].iloc[0] = dtP['reportingPeriodActualEndBalanceAmount'].mean() / dtP['originalLoanAmount'].mean()
-        dtRow['Avg Loan Size $'].iloc[0] = dtP['originalLoanAmount'].mean()
+        return np.array(['commercialCreditScore', 'obligorEmploymentVerificationCode',
+                         'gracePeriodNumber', 'obligorIncomeVerificationCode',
+                         'servicingFeePercentage', 'vehicleManufacturerName'])
 
 
-        dtRow['Total Delq %'].iloc[0] = np.multiply(dtP['currentDelinquencyStatus'] > 0,dtP['reportingPeriodActualEndBalanceAmount']).sum() / dtP['reportingPeriodActualEndBalanceAmount'].sum()
-        dtRow['Delq 1m %'].iloc[0] = np.multiply(dtP['monthsDelinquent'] == 1,dtP['reportingPeriodActualEndBalanceAmount']).sum() / dtP['reportingPeriodActualEndBalanceAmount'].sum()
-        dtRow['Delq 2m %'].iloc[0] = np.multiply(dtP['monthsDelinquent'] == 2,dtP['reportingPeriodActualEndBalanceAmount']).sum() / dtP['reportingPeriodActualEndBalanceAmount'].sum()
-        dtRow['Delq 3m %'].iloc[0] = np.multiply(dtP['monthsDelinquent'] == 3,dtP['reportingPeriodActualEndBalanceAmount']).sum() / dtP['reportingPeriodActualEndBalanceAmount'].sum()
-        dtRow['Delq 3m+ %'].iloc[0] = np.multiply(dtP['monthsDelinquent'] == 4,dtP['reportingPeriodActualEndBalanceAmount']).sum() / dtP['reportingPeriodActualEndBalanceAmount'].sum()
-        dtRow['Def %'].iloc[0] = dtP['chargedoffPrincipalAmount'].sum() / dtP['reportingPeriodActualEndBalanceAmount'].sum()
-        dtRow['PP %'].iloc[0] = dtP['principalPrepaid'].sum() / dtP['reportingPeriodBeginningLoanBalanceAmount'].sum()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-        dtRow['WAVG LTV %'].iloc[0] = WAVG(dtP,'loanToValueRatio','originalLoanAmount')
-        dtRow['WAVG Term m'].iloc[0] = WAVG(dtP,'originalLoanTerm','originalLoanAmount')
-        dtRow['WAVG Age m'].iloc[0] = WAVG(dtP,'age','originalLoanAmount')
-        dtRow['WAVG MFC m'].iloc[0] = WAVG(dtP,'monthsFromCutoffDate','originalLoanAmount') + 1
-        dtRow['WAVG PTI %'].iloc[0] = WAVG(dtP,'paymentToIncomePercentage','originalLoanAmount')
+def WAVG(dtPmts: pd.DataFrame, fieldStr: str, weightStr: str) -> float:
+    """Weight-average ``fieldStr`` by ``weightStr``. Returns NaN if weights sum to 0."""
+    w = dtPmts[weightStr]
+    total = float(w.sum())
+    if total == 0:
+        return float('nan')
+    return float((dtPmts[fieldStr] * w).sum()) / total
 
-        consIndx = np.where(np.logical_and(dtP['consumerCreditScore'] > 0,np.isnan(dtP['consumerCreditScore']) == False))
-        commIndx = np.where(np.logical_and(dtP['commercialCreditScore'] > 0,np.isnan(dtP['commercialCreditScore']) == False))
 
-        if (len(consIndx[0]) > 0):
-            dtRow['WAVG Cons Score'].iloc[0] = WAVG(dtP.iloc[consIndx],'consumerCreditScore','originalLoanAmount')
-            dtRow['Cons %'].iloc[0] = len(consIndx[0]) / dtP.shape[0]
-        if (len(commIndx[0]) > 0):
-            dtRow['WAVG Comm Score'].iloc[0] = WAVG(dtP.iloc[commIndx],'commercialCreditScore','originalLoanAmount')
-            dtRow['Comm %'].iloc[0] = len(commIndx[0]) / dtP.shape[0]
+def _div(num: float, den: float) -> float:
+    """Safe scalar divide returning NaN on zero denominator."""
+    return float(num) / float(den) if den else float('nan')
 
-        dtRow['New %'].iloc[0] = (dtP['vehicleNewUsedCode'] == 1).sum() / dtP.shape[0]
-        dtRow['Used %'].iloc[0] = (dtP['vehicleNewUsedCode'] == 2).sum() / dtP.shape[0]
 
-        dtRow['Car %'].iloc[0] = (dtP['vehicleTypeCode'] == 1).sum() / dtP.shape[0]
-        dtRow['Truck %'].iloc[0] = (dtP['vehicleTypeCode'] == 2).sum() / dtP.shape[0]
-        dtRow['SUV %'].iloc[0] = (dtP['vehicleTypeCode'] == 3).sum() / dtP.shape[0]
+# ---------------------------------------------------------------------------
+# Summary row construction
+# ---------------------------------------------------------------------------
 
-        dtRow['<2010 %'].iloc[0] = (dtP['vehicleModelYear'] < 2010).sum() / dtP.shape[0]
-        dtRow['<2015 %'].iloc[0] = (dtP['vehicleModelYear'] < 2015).sum() / dtP.shape[0]
-        dtRow['2015 %'].iloc[0] = (dtP['vehicleModelYear'] == 2015).sum() / dtP.shape[0]
-        dtRow['2016 %'].iloc[0] = (dtP['vehicleModelYear'] == 2016).sum() / dtP.shape[0]
-        dtRow['2017 %'].iloc[0] = (dtP['vehicleModelYear'] == 2017).sum() / dtP.shape[0]
+def create_summary_row(dtPmts: pd.DataFrame, rowName: str) -> pd.DataFrame | None:
+    """Build a one-row summary DataFrame for the given slice. Returns None if empty."""
+    if dtPmts.shape[0] == 0:
+        log.warning("No rows in segmentation: %s", rowName)
+        return None
 
-        dtRow['CA %'].iloc[0] = (dtP['obligorGeographicLocation'] == 'CA').sum() / dtP.shape[0]
-        dtRow['TX %'].iloc[0] = (dtP['obligorGeographicLocation'] == 'TX').sum() / dtP.shape[0]
-        dtRow['FL %'].iloc[0] = (dtP['obligorGeographicLocation'] == 'FL').sum() / dtP.shape[0]
-        dtRow['NJ %'].iloc[0] = (dtP['obligorGeographicLocation'] == 'NJ').sum() / dtP.shape[0]
-        dtRow['OH %'].iloc[0] = (dtP['obligorGeographicLocation'] == 'OH').sum() / dtP.shape[0]
+    row: dict = {h: 0.0 for h in const.summaryRowHeader()}
 
-        dtRow['Inc Ver %'].iloc[0] = (dtP['obligorIncomeVerificationLevelCode'] >= 3).sum() / dtP.shape[0]
-        dtRow['Emp Ver %'].iloc[0] = (dtP['obligorEmploymentVerificationCode'] >= 3).sum() / dtP.shape[0]
+    first_mask = dtPmts['monthsFromCutoffDate'] == 0
+    first_open_bal = float(dtPmts.loc[first_mask, 'reportingPeriodBeginningLoanBalanceAmount'].sum())
+    row['Total Def %'] = _div(dtPmts['chargedoffPrincipalAmount'].sum(), first_open_bal)
+    row['Total PP %'] = _div(dtPmts['principalPrepaid'].sum(), first_open_bal)
 
-        if ('baseResidualValue' in dtP.columns):
-            dtRow['Total TurnIn %'].iloc[0] = np.in1d(dtPmts['terminationIndicator'],[2,4]).sum() / len(dtPmts['assetNumber'].unique())
-            dtRow['WAVG APR %'].iloc[0] = WAVG(dtP, 'securitizationDiscountRate', 'originalLoanAmount')
-            dtRow['BaseR / MSRP %'].iloc[0] = dtP['baseResidualValue'].sum() / dtP['vehicleValueAmount'].sum()
-            dtRow['DBaseR / Sec %'].iloc[0] = np.pv(dtP['securitizationDiscountRate'],dtP['remainingTermToMaturityNumber'],0,
-                                                    -dtP['baseResidualValue'],1).sum() / dtP['reportingPeriodBeginningLoanBalanceAmount'].sum()
-            gainIndx = np.where(np.abs(dtPmts['saleGainOrLoss']) > 0)
-            if (len(gainIndx[0]) > 0):
-                dtRow['Total Gain/Loss Sale %'].iloc[0] = dtPmts['saleGainOrLoss'].iloc[gainIndx].sum() / dtPmts['contractResidualValue'].iloc[gainIndx].sum()
+    last_mask = dtPmts['summaryDate'] == 1
+    dtP = dtPmts.loc[last_mask]
+    n = dtP.shape[0]
+
+    if n > 0:
+        end_bal_total = float(dtP['reportingPeriodActualEndBalanceAmount'].sum())
+        beg_bal_total = float(dtP['reportingPeriodBeginningLoanBalanceAmount'].sum())
+
+        row['No of Loans'] = n
+        row['Avg Prin Bal $'] = float(dtP['reportingPeriodActualEndBalanceAmount'].mean())
+        row['Avg Prin Bal %'] = _div(
+            float(dtP['reportingPeriodActualEndBalanceAmount'].mean()),
+            float(dtP['originalLoanAmount'].mean()),
+        )
+        row['Avg Loan Size $'] = float(dtP['originalLoanAmount'].mean())
+
+        end_bal_w = dtP['reportingPeriodActualEndBalanceAmount']
+        row['Total Delq %'] = _div(
+            ((dtP['currentDelinquencyStatus'] > 0) * end_bal_w).sum(), end_bal_total
+        )
+        row['Delq 1m %'] = _div(((dtP['monthsDelinquent'] == 1) * end_bal_w).sum(), end_bal_total)
+        row['Delq 2m %'] = _div(((dtP['monthsDelinquent'] == 2) * end_bal_w).sum(), end_bal_total)
+        row['Delq 3m %'] = _div(((dtP['monthsDelinquent'] == 3) * end_bal_w).sum(), end_bal_total)
+        row['Delq 3m+ %'] = _div(((dtP['monthsDelinquent'] == 4) * end_bal_w).sum(), end_bal_total)
+        row['Def %'] = _div(dtP['chargedoffPrincipalAmount'].sum(), end_bal_total)
+        row['PP %'] = _div(dtP['principalPrepaid'].sum(), beg_bal_total)
+
+        row['WAVG LTV %'] = WAVG(dtP, 'loanToValueRatio', 'originalLoanAmount')
+        row['WAVG Term m'] = WAVG(dtP, 'originalLoanTerm', 'originalLoanAmount')
+        row['WAVG Age m'] = WAVG(dtP, 'age', 'originalLoanAmount')
+        row['WAVG MFC m'] = WAVG(dtP, 'monthsFromCutoffDate', 'originalLoanAmount') + 1
+        row['WAVG PTI %'] = WAVG(dtP, 'paymentToIncomePercentage', 'originalLoanAmount')
+
+        cons_mask = (dtP['consumerCreditScore'] > 0) & dtP['consumerCreditScore'].notna()
+        comm_mask = (dtP['commercialCreditScore'] > 0) & dtP['commercialCreditScore'].notna()
+        if cons_mask.any():
+            row['WAVG Cons Score'] = WAVG(dtP.loc[cons_mask], 'consumerCreditScore', 'originalLoanAmount')
+            row['Cons %'] = _div(int(cons_mask.sum()), n)
+        if comm_mask.any():
+            row['WAVG Comm Score'] = WAVG(dtP.loc[comm_mask], 'commercialCreditScore', 'originalLoanAmount')
+            row['Comm %'] = _div(int(comm_mask.sum()), n)
+
+        row['New %'] = _div((dtP['vehicleNewUsedCode'] == 1).sum(), n)
+        row['Used %'] = _div((dtP['vehicleNewUsedCode'] == 2).sum(), n)
+
+        row['Car %'] = _div((dtP['vehicleTypeCode'] == 1).sum(), n)
+        row['Truck %'] = _div((dtP['vehicleTypeCode'] == 2).sum(), n)
+        row['SUV %'] = _div((dtP['vehicleTypeCode'] == 3).sum(), n)
+
+        row['<2010 %'] = _div((dtP['vehicleModelYear'] < 2010).sum(), n)
+        row['<2015 %'] = _div((dtP['vehicleModelYear'] < 2015).sum(), n)
+        row['2015 %'] = _div((dtP['vehicleModelYear'] == 2015).sum(), n)
+        row['2016 %'] = _div((dtP['vehicleModelYear'] == 2016).sum(), n)
+        row['2017 %'] = _div((dtP['vehicleModelYear'] == 2017).sum(), n)
+
+        for st in ('CA', 'TX', 'FL', 'OH', 'NJ'):
+            row[f'{st} %'] = _div((dtP['obligorGeographicLocation'] == st).sum(), n)
+
+        if 'obligorIncomeVerificationLevelCode' in dtP.columns:
+            row['Inc Ver %'] = _div((dtP['obligorIncomeVerificationLevelCode'] >= 3).sum(), n)
+        if 'obligorEmploymentVerificationCode' in dtP.columns:
+            row['Emp Ver %'] = _div((dtP['obligorEmploymentVerificationCode'] >= 3).sum(), n)
+
+        if 'baseResidualValue' in dtP.columns:
+            if 'terminationIndicator' in dtPmts.columns:
+                row['Total TurnIn %'] = _div(
+                    int(np.isin(dtPmts['terminationIndicator'], [2, 4]).sum()),
+                    int(dtPmts['assetNumber'].nunique()),
+                )
+            if 'securitizationDiscountRate' in dtP.columns:
+                row['WAVG APR %'] = WAVG(dtP, 'securitizationDiscountRate', 'originalLoanAmount')
+            if 'vehicleValueAmount' in dtP.columns:
+                row['BaseR / MSRP %'] = _div(
+                    float(dtP['baseResidualValue'].sum()),
+                    float(dtP['vehicleValueAmount'].sum()),
+                )
+            if all(c in dtP.columns for c in
+                   ('securitizationDiscountRate', 'remainingTermToMaturityNumber',
+                    'reportingPeriodBeginningLoanBalanceAmount')):
+                pv_per_loan = npf.pv(
+                    dtP['securitizationDiscountRate'],
+                    dtP['remainingTermToMaturityNumber'],
+                    0,
+                    -dtP['baseResidualValue'],
+                    1,
+                )
+                row['DBaseR / Sec %'] = _div(
+                    float(np.nansum(pv_per_loan)),
+                    float(dtP['reportingPeriodBeginningLoanBalanceAmount'].sum()),
+                )
+            if 'saleGainOrLoss' in dtPmts.columns and 'contractResidualValue' in dtPmts.columns:
+                gain_mask = dtPmts['saleGainOrLoss'].abs() > 0
+                if gain_mask.any():
+                    row['Total Gain/Loss Sale %'] = _div(
+                        float(dtPmts.loc[gain_mask, 'saleGainOrLoss'].sum()),
+                        float(dtPmts.loc[gain_mask, 'contractResidualValue'].sum()),
+                    )
+            drop_cols = []
         else:
-            dtRow['WAVG APR %'].iloc[0] = WAVG(dtP, 'originalInterestRatePercentage', 'originalLoanAmount')
-            dtRow = dtRow.drop(['BaseR / MSRP %','DBaseR / Sec %','Total TurnIn %','Total Gain/Loss Sale %'],axis=1)
-
-        return dtRow
+            row['WAVG APR %'] = WAVG(dtP, 'originalInterestRatePercentage', 'originalLoanAmount')
+            drop_cols = ['BaseR / MSRP %', 'DBaseR / Sec %', 'Total TurnIn %',
+                         'Total Gain/Loss Sale %']
 
     else:
-        print('Warning: No rows in segmentation ...')
+        drop_cols = []
 
-def create_summary_strats(dtPmts,functionStr,fieldStr,rowStr,labels,factor):
+    dtRow = pd.DataFrame([row], index=[rowName.title()])
+    if drop_cols:
+        dtRow = dtRow.drop(columns=[c for c in drop_cols if c in dtRow.columns])
+    return dtRow
 
-    dtSumm = create_summary_row(dtPmts, rowStr + ': Overall')
-    if (functionStr == 'stratify'):
-    # Case 1: Where the program stratifies into 7 equally spaced categories
-        intLength = (dtPmts[fieldStr].max() - dtPmts[fieldStr].min()) / const.intNo()
-        startNo = float(dtPmts[fieldStr].min()) + np.arange(0, const.intNo(),1) * intLength
-        endNo = float(dtPmts[fieldStr].min()) + np.arange(1, const.intNo() + 1,1) * intLength
-        for i in range(0, const.intNo()):
-            rowIndx = np.where(np.logical_and.reduce([dtPmts[fieldStr] >= startNo[i],dtPmts[fieldStr] < endNo[i],np.isnan(dtPmts[fieldStr]) == False]))
-            dtSumm = pd.concat([dtSumm,create_summary_row(dtPmts.iloc[rowIndx],
-                                    rowStr + ': ' + str("{0:.2f}".format(startNo[i])) + ' - ' + str("{0:.2f}".format(endNo[i])))],axis=0)
 
-    elif (functionStr == 'labels'):
-    # Case 2: Where categories are specified ahead of time
-        for i in range(0, len(labels)):
-            rowIndx = np.where(dtPmts[fieldStr] == i + factor)
-            dtSumm = pd.concat([dtSumm, create_summary_row(dtPmts.iloc[rowIndx], rowStr + ': ' + labels[i])], axis=0)
+def create_summary_strats(
+    dtPmts: pd.DataFrame,
+    functionStr: str,
+    fieldStr: str,
+    rowStr: str,
+    labels: list,
+    factor: int,
+) -> pd.DataFrame:
+    """Stratify dtPmts into N bins by fieldStr and produce one summary row per bin."""
+    dtSumm = create_summary_row(dtPmts, f"{rowStr}: Overall")
 
-    elif (functionStr == 'unique'):
-    # Case 3: Where categories are determined by unique values of a text column
-        labels = np.sort(dtPmts[fieldStr].unique())
-        for i in range(0, len(labels)):
-            rowIndx = np.where(dtPmts[fieldStr] == labels[i])
-            dtSumm = pd.concat([dtSumm, create_summary_row(dtPmts.iloc[rowIndx], rowStr + ': ' + str(labels[i]))], axis=0)
+    if functionStr == 'stratify':
+        lo = float(dtPmts[fieldStr].min())
+        hi = float(dtPmts[fieldStr].max())
+        step = (hi - lo) / const.intNo()
+        starts = lo + np.arange(0, const.intNo()) * step
+        ends = lo + np.arange(1, const.intNo() + 1) * step
+        for s, e in zip(starts, ends):
+            mask = (dtPmts[fieldStr] >= s) & (dtPmts[fieldStr] < e) & dtPmts[fieldStr].notna()
+            row = create_summary_row(dtPmts.loc[mask], f"{rowStr}: {s:.2f} - {e:.2f}")
+            if row is not None:
+                dtSumm = pd.concat([dtSumm, row], axis=0)
 
-    print('Calculating row: %s ...' %rowStr)
+    elif functionStr == 'labels':
+        for i, lab in enumerate(labels):
+            mask = dtPmts[fieldStr] == (i + factor)
+            row = create_summary_row(dtPmts.loc[mask], f"{rowStr}: {lab}")
+            if row is not None:
+                dtSumm = pd.concat([dtSumm, row], axis=0)
 
+    elif functionStr == 'unique':
+        for lab in np.sort(dtPmts[fieldStr].dropna().unique()):
+            mask = dtPmts[fieldStr] == lab
+            row = create_summary_row(dtPmts.loc[mask], f"{rowStr}: {lab}")
+            if row is not None:
+                dtSumm = pd.concat([dtSumm, row], axis=0)
+    else:
+        raise ValueError(f"Unknown functionStr: {functionStr!r}")
+
+    log.info("Calculated stratification: %s", rowStr)
     return dtSumm
 
-def create_summary(dtPmts):
 
-    print('Creating summary report ...')
-    return pd.concat([create_summary_strats(dtPmts,'stratify','originalLoanTerm','Term',[],[]),
-                        create_summary_strats(dtPmts,'stratify','originalLoanAmount','Size',[],[]),
-                        create_summary_strats(dtPmts,'stratify','nextInterestRatePercentage','APR',[],[]),
-                        create_summary_strats(dtPmts,'stratify','age','Age',[],[]),
-                        create_summary_strats(dtPmts,'stratify','consumerCreditScore','FICO',[],[]),
-                        create_summary_strats(dtPmts,'stratify','commercialCreditScore','CommScore',[],[]),
-                        create_summary_strats(dtPmts,'stratify','loanToValueRatio','LTV',[],[]),
-                        create_summary_strats(dtPmts,'stratify','paymentToIncomePercentage','PTI',[],[]),
-                        create_summary_strats(dtPmts,'labels','vehicleTypeCode','VehType',['Car', 'Truck', 'SUV'],1),
-                        create_summary_strats(dtPmts,'labels','vehicleNewUsedCode','VehCond',['New', 'Used'],1),
-                        create_summary_strats(dtPmts,'labels','vehicleModelYear', 'VehYear', ['2012','2013','2014','2015','2016','2017'],2012),
-                        create_summary_strats(dtPmts,'unique','obligorEmploymentVerificationCode','EmpVer',[],[]),
-                        create_summary_strats(dtPmts,'unique','obligorIncomeVerificationLevelCode','IncVer',[],[]),
-                        create_summary_strats(dtPmts, 'unique', 'vehicleManufacturerName', 'VehManu', [], [])],axis=0)
+def create_summary(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """Top-level summary: all standard stratifications stacked."""
+    log.info("Creating summary report")
+    parts = [
+        create_summary_strats(dtPmts, 'stratify', 'originalLoanTerm', 'Term', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'originalLoanAmount', 'Size', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'nextInterestRatePercentage', 'APR', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'age', 'Age', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'consumerCreditScore', 'FICO', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'commercialCreditScore', 'CommScore', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'loanToValueRatio', 'LTV', [], 0),
+        create_summary_strats(dtPmts, 'stratify', 'paymentToIncomePercentage', 'PTI', [], 0),
+        create_summary_strats(dtPmts, 'labels', 'vehicleTypeCode', 'VehType',
+                              ['Car', 'Truck', 'SUV'], 1),
+        create_summary_strats(dtPmts, 'labels', 'vehicleNewUsedCode', 'VehCond',
+                              ['New', 'Used'], 1),
+        create_summary_strats(dtPmts, 'labels', 'vehicleModelYear', 'VehYear',
+                              ['2012', '2013', '2014', '2015', '2016', '2017'], 2012),
+        create_summary_strats(dtPmts, 'unique', 'obligorEmploymentVerificationCode', 'EmpVer', [], 0),
+        create_summary_strats(dtPmts, 'unique', 'obligorIncomeVerificationLevelCode', 'IncVer', [], 0),
+        create_summary_strats(dtPmts, 'unique', 'vehicleManufacturerName', 'VehManu', [], 0),
+    ]
+    return pd.concat(parts, axis=0)
 
-def create_comparison(dtPmts):
 
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    dtComp = create_summary_row(dtPmts,'All Trusts')
-
-    for s in secKeys:
-        secIndx = np.where(dtPmts['securitizationKey'] == s)
-        dtComp = pd.concat([dtComp,create_summary_row(dtPmts.iloc[secIndx],s)],axis=0)
-        print('Calculating strats for securitization: %s ...' %s)
-
+def create_comparison(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """One summary row per securitization, plus an 'All Trusts' row at top."""
+    sec_keys = np.sort(dtPmts['securitizationKey'].dropna().unique())
+    dtComp = create_summary_row(dtPmts, 'All Trusts')
+    for s in sec_keys:
+        row = create_summary_row(dtPmts.loc[dtPmts['securitizationKey'] == s], s)
+        if row is not None:
+            dtComp = pd.concat([dtComp, row], axis=0)
+            log.info("Calculated strats for: %s", s)
     return dtComp
 
-def create_performance(dtPmts,axisStr,assetStr):
-# Plots specific outputs based on method
-#axisStr = 'monthsFromCutoffDate'
 
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    secKeys = np.append(secKeys,'All Trusts')
+# ---------------------------------------------------------------------------
+# Performance time series
+# ---------------------------------------------------------------------------
 
-    ABSTable = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' ABSspeed')
-    ppTable = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' Prepays')
-    delq30Table = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' Delq30')
-    delq60Table = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' Delq60')
-    delq90Table = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' Delq90')
-    defTable = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' Def')
-    CNLTable = pd.DataFrame(data=np.ones(shape=(dtPmts[axisStr].unique().shape[0],len(secKeys)))*np.nan,
-                            index=np.sort(dtPmts[axisStr].unique()),columns=secKeys+' CNL')
+def create_performance(dtPmts: pd.DataFrame, axisStr: str, assetStr: str) -> pd.DataFrame:
+    """Per-securitization performance metrics indexed by ``axisStr``.
 
-    for s in secKeys:
-        if ('Trust' in s):
+    Returns a wide DataFrame with columns ``{sec} ABSspeed``, ``{sec} Def``,
+    ``{sec} Delq60``, ``{sec} CNL`` for each securitization + 'All Trusts'.
+    """
+    sec_keys = list(np.sort(dtPmts['securitizationKey'].dropna().unique())) + ['All Trusts']
+    axis_vals = np.sort(dtPmts[axisStr].dropna().unique())
 
-            if (s == 'All Trusts'):
-                secIndx = np.arange(0,dtPmts.shape[0])
-            else:
-                secIndx = np.where(dtPmts['securitizationKey'] == s)
+    def _empty(suffix: str) -> pd.DataFrame:
+        return pd.DataFrame(
+            data=np.full((len(axis_vals), len(sec_keys)), np.nan),
+            index=axis_vals,
+            columns=[f"{s} {suffix}" for s in sec_keys],
+        )
 
-            if (assetStr == 'Auto Loans'):
-                dtSMM = dtPmts.iloc[secIndx].groupby([axisStr])['reportingPeriodBeginningLoanBalanceAmount','chargedoffPrincipalAmount','reportingPeriodActualEndBalanceAmount',
-                                                            'actualPrincipalCollectedAmount','otherPrincipalAdjustmentAmount','scheduledPrincipalAmount'].sum()
-                SMMTable = (dtSMM['actualPrincipalCollectedAmount'] + dtSMM['otherPrincipalAdjustmentAmount'] + dtSMM['chargedoffPrincipalAmount'] - dtSMM['scheduledPrincipalAmount']) / \
-                                                        (dtSMM['reportingPeriodBeginningLoanBalanceAmount'] - dtSMM['scheduledPrincipalAmount'])
-                ABSTable[s+' ABSspeed'] = SMMTable/(1-SMMTable*(WAVG(dtPmts.iloc[secIndx],'ageFromCutoffDate','beginningBalanceAtCutoffDate')-1)).values
-            elif (assetStr == 'Auto Leases'):
-                dtSMM = dtPmts.iloc[secIndx].groupby([axisStr])['reportingPeriodBeginningLoanBalanceAmount','reportingPeriodActualEndBalanceAmount','ageFromCutoffDate','beginningBalanceAtCutoffDate',
-                                                                'acquisitionCost','scheduledSecuritizationBeginValueAmount','scheduledSecuritizationEndValueAmount'].sum()
+    ABSTable = _empty('ABSspeed')
+    ppTable = _empty('Prepays')
+    delq30Table = _empty('Delq30')
+    delq60Table = _empty('Delq60')
+    delq90Table = _empty('Delq90')
+    defTable = _empty('Def')
+    CNLTable = _empty('CNL')
 
-                dtSurv = 1 - (dtSMM['reportingPeriodBeginningLoanBalanceAmount'] / dtSMM['scheduledSecuritizationBeginValueAmount']) / (dtSMM['reportingPeriodActualEndBalanceAmount'] / dtSMM['scheduledSecuritizationEndValueAmount'])
-                ABSTable[s +' ABSspeed'] = dtSurv / (1 + dtSurv * WAVG(dtPmts.iloc[secIndx],'ageFromCutoffDate','beginningBalanceAtCutoffDate')).values
+    for s in sec_keys:
+        if 'Trust' not in s:
+            continue
+        sec_slice = dtPmts if s == 'All Trusts' else dtPmts.loc[dtPmts['securitizationKey'] == s]
+        if sec_slice.empty:
+            continue
 
-            ppTable[s+' Prepays'] = dtPmts.iloc[secIndx].groupby([axisStr])['principalPrepaid'].sum() / dtPmts.iloc[secIndx].groupby([axisStr])['reportingPeriodBeginningLoanBalanceAmount'].sum()
+        if assetStr == 'Auto Loans':
+            grp_cols = ['reportingPeriodBeginningLoanBalanceAmount', 'chargedoffPrincipalAmount',
+                        'reportingPeriodActualEndBalanceAmount', 'actualPrincipalCollectedAmount',
+                        'otherPrincipalAdjustmentAmount', 'scheduledPrincipalAmount']
+            grp_cols = [c for c in grp_cols if c in sec_slice.columns]
+            dtSMM = sec_slice.groupby(axisStr)[grp_cols].sum()
+            unscheduled = (dtSMM['actualPrincipalCollectedAmount']
+                           + dtSMM['otherPrincipalAdjustmentAmount']
+                           + dtSMM['chargedoffPrincipalAmount']
+                           - dtSMM['scheduledPrincipalAmount'])
+            denom = dtSMM['reportingPeriodBeginningLoanBalanceAmount'] - dtSMM['scheduledPrincipalAmount']
+            smm = unscheduled / denom.replace(0, np.nan)
+            wavg_age = WAVG(sec_slice, 'ageFromCutoffDate', 'beginningBalanceAtCutoffDate')
+            ABSTable[f"{s} ABSspeed"] = smm / (1 - smm * (wavg_age - 1))
 
-            delqTable = pd.pivot_table(data=dtPmts.iloc[secIndx],values='reportingPeriodActualEndBalanceAmount',index=axisStr,columns='monthsDelinquent',aggfunc=np.sum)
+        elif assetStr == 'Auto Leases':
+            grp_cols = ['reportingPeriodBeginningLoanBalanceAmount',
+                        'reportingPeriodActualEndBalanceAmount', 'ageFromCutoffDate',
+                        'beginningBalanceAtCutoffDate', 'acquisitionCost',
+                        'scheduledSecuritizationBeginValueAmount',
+                        'scheduledSecuritizationEndValueAmount']
+            grp_cols = [c for c in grp_cols if c in sec_slice.columns]
+            dtSMM = sec_slice.groupby(axisStr)[grp_cols].sum()
+            surv = (
+                1
+                - (dtSMM['reportingPeriodBeginningLoanBalanceAmount']
+                   / dtSMM['scheduledSecuritizationBeginValueAmount'].replace(0, np.nan))
+                / (dtSMM['reportingPeriodActualEndBalanceAmount']
+                   / dtSMM['scheduledSecuritizationEndValueAmount'].replace(0, np.nan))
+            )
+            wavg_age = WAVG(sec_slice, 'ageFromCutoffDate', 'beginningBalanceAtCutoffDate')
+            ABSTable[f"{s} ABSspeed"] = surv / (1 + surv * wavg_age)
 
-            if (1 in delqTable.columns):
-                delq30Table[s+' Delq30'] = delqTable[1]/delqTable.sum(axis=1)
-            if (2 in delqTable.columns):
-                delq60Table[s+' Delq60'] = delqTable[2]/delqTable.sum(axis=1)
-            if (3 in delqTable.columns):
-                delq90Table[s+' Delq90'] = delqTable[3]/delqTable.sum(axis=1)
-            if (5 in delqTable.columns):
-                defTable[s+' Def'] = delqTable[5]/delqTable.sum(axis=1)
+        if 'principalPrepaid' in sec_slice.columns:
+            num = sec_slice.groupby(axisStr)['principalPrepaid'].sum()
+            den = sec_slice.groupby(axisStr)['reportingPeriodBeginningLoanBalanceAmount'].sum()
+            ppTable[f"{s} Prepays"] = num / den.replace(0, np.nan)
 
-            if (axisStr == 'monthsFromCutoffDate'):
-                CNLstr = 'beginningBalanceAtCutoffDate'
-                CNLdivisor = dtPmts[[CNLstr, axisStr]].iloc[secIndx]
-            else:
-                CNLstr = 'originalLoanAmount'
-                CNLdivisor = dtPmts[[CNLstr, axisStr, 'monthsFromCutoffDate']].iloc[secIndx]
+        delqTable = pd.pivot_table(
+            data=sec_slice,
+            values='reportingPeriodActualEndBalanceAmount',
+            index=axisStr,
+            columns='monthsDelinquent',
+            aggfunc='sum',
+        )
+        denom = delqTable.sum(axis=1)
+        if 1 in delqTable.columns:
+            delq30Table[f"{s} Delq30"] = delqTable[1] / denom
+        if 2 in delqTable.columns:
+            delq60Table[f"{s} Delq60"] = delqTable[2] / denom
+        if 3 in delqTable.columns:
+            delq90Table[f"{s} Delq90"] = delqTable[3] / denom
+        if 5 in delqTable.columns:
+            defTable[f"{s} Def"] = delqTable[5] / denom
 
-            CNLdivisor = dtPmts[CNLstr].iloc[np.where(CNLdivisor['monthsFromCutoffDate'] == 0)].sum()
-            CNLTable[s+' CNL'] = (dtPmts.iloc[secIndx].groupby([axisStr])['netLosses'].sum() / CNLdivisor).cumsum()
+        if axisStr == 'monthsFromCutoffDate' and 'beginningBalanceAtCutoffDate' in sec_slice.columns:
+            CNLstr = 'beginningBalanceAtCutoffDate'
+            divisor = float(
+                sec_slice.loc[sec_slice['monthsFromCutoffDate'] == 0, CNLstr].sum()
+            )
+        else:
+            CNLstr = 'originalLoanAmount'
+            divisor = float(
+                sec_slice.loc[sec_slice['monthsFromCutoffDate'] == 0, CNLstr].sum()
+            )
+        if divisor and 'netLosses' in sec_slice.columns:
+            CNLTable[f"{s} CNL"] = (
+                sec_slice.groupby(axisStr)['netLosses'].sum() / divisor
+            ).cumsum()
 
-            print('Calculated performance for securitization: %s on axis: %s ...' %(s.title(),axisStr))
+        log.info("Calculated performance for: %s on axis: %s", s, axisStr)
 
-    outTable = pd.concat([ABSTable,defTable,delq60Table,CNLTable],axis=1)
+    return pd.concat([ABSTable, defTable, delq60Table, CNLTable], axis=1)
 
-    return outTable
 
-def plot_performance(dtPmts):
+# ---------------------------------------------------------------------------
+# Life-of-deal curves and roll rates
+# ---------------------------------------------------------------------------
 
+def create_curves(dtPmts: pd.DataFrame, axisStr: str) -> pd.DataFrame:
+    """Lifetime balance curves by delinquency state, broken out by prime tier."""
+    fieldStr = ['Curr', '1mDelq', '2mDelq', '3mDelq', '3m+Delq', 'Def', 'PP']
+    primeStates = ['Other', 'Subprime <640', 'Nearprime 640-680', 'Prime 680-740', 'Superprime >740']
+
+    axis_vals = np.sort(dtPmts[axisStr].dropna().unique())
+    cols: list[str] = []
+    pieces: dict[str, pd.DataFrame] = {}
+
+    for p, prime_name in enumerate(primeStates):
+        sec_slice = dtPmts.loc[dtPmts['primeIndicator'] == p]
+        if sec_slice.empty:
+            continue
+        dtBal = pd.pivot_table(
+            data=sec_slice,
+            values='reportingPeriodBeginningLoanBalanceAmount',
+            columns='monthsDelinquent',
+            index=axisStr,
+            aggfunc='sum',
+        ).fillna(0).cumsum()
+        orig_sum = float(sec_slice['originalLoanAmount'].sum())
+        if orig_sum:
+            dtBal = (dtBal / orig_sum).reindex(axis_vals).ffill()
+        dtBal.columns = [f"{prime_name} {fieldStr[int(c)]}" if int(c) < len(fieldStr) else str(c)
+                         for c in dtBal.columns]
+        pieces[prime_name] = dtBal
+        cols.extend([f"{prime_name} {f}" for f in fieldStr])
+        log.info("Created curve for prime category: %s", prime_name)
+
+    if not pieces:
+        return pd.DataFrame()
+    out = pd.concat(pieces.values(), axis=1).reindex(axis_vals).ffill()
+    # Reorder by metric grouping (PP, Def, 1m, 2m, 3m, 3m+)
+    order = [c for s in ('PP', 'Def', '1mDelq', '2mDelq', '3mDelq', '3m+Delq')
+             for c in out.columns if s in c]
+    return out[order] if order else out
+
+
+def create_rollrates_matrix(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """Single-period delinquency-state transition matrix."""
+    if 'reportingPeriodActualEndBalanceAmount' not in dtPmts.columns:
+        return pd.DataFrame(index=const.rrCols(), columns=const.rrCols())
+    states = np.sort(dtPmts['monthsDelinquent'].dropna().unique())
+    n_states = len(const.rrCols())
+    out = np.zeros((n_states, n_states))
+
+    # Pre-index by position so .iloc[i+1] is safe.
+    dt = dtPmts.reset_index(drop=True)
+    next_md = dt['monthsDelinquent'].shift(-1)
+    bal = dt['reportingPeriodActualEndBalanceAmount']
+
+    for st in states:
+        for end_state in states:
+            pre_mask = (dt['monthsDelinquent'] == st) & (dt['summaryDate'] == 0)
+            post_mask = pre_mask & (next_md == end_state)
+            den = float(bal.where(pre_mask).sum())
+            if den:
+                out[int(st), int(end_state)] = float(bal.where(post_mask).sum()) / den
+    return pd.DataFrame(out, index=const.rrCols(), columns=const.rrCols())
+
+
+def create_rollrates_ts(dtPmts: pd.DataFrame, axisStr: str) -> pd.DataFrame:
+    """Time-series of roll rates by axis: start-state x end-state x period."""
+    dt = dtPmts.reset_index(drop=True)
+    if 'reportingPeriodActualEndBalanceAmount' not in dt.columns:
+        return pd.DataFrame()
+    axis_vals = np.sort(dt[axisStr].dropna().unique())
+    if len(axis_vals) < 2:
+        return pd.DataFrame()
+    axis_vals = axis_vals[:-1]  # last period has no next
+
+    next_md = dt['monthsDelinquent'].shift(-1)
+    bal = dt['reportingPeriodActualEndBalanceAmount']
+
+    n_start = len(const.rrCols()) - 2
+    n_end = len(const.rrCols())
+    cols = [f"{const.rrCols()[s]}-{const.rrCols()[e]}"
+            for s in range(n_start) for e in range(n_end)]
+    out = pd.DataFrame(np.zeros((len(axis_vals), len(cols))), index=axis_vals, columns=cols)
+
+    for s in range(n_start):
+        for e in range(n_end):
+            col = f"{const.rrCols()[s]}-{const.rrCols()[e]}"
+            for ind in axis_vals:
+                pre_mask = (
+                    (dt[axisStr] == ind)
+                    & (dt['monthsDelinquent'] == s)
+                    & (dt['summaryDate'] == 0)
+                )
+                post_mask = pre_mask & (next_md == e)
+                den = float(bal.where(pre_mask).sum())
+                if den:
+                    out.at[ind, col] = float(bal.where(post_mask).sum()) / den
+            log.debug("Roll-rate %s on axis %s done", col, axisStr)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Plotting (optional — lazy import)
+# ---------------------------------------------------------------------------
+
+def plot_performance(dtPmts: pd.DataFrame) -> None:
+    """Plot ABS speed / prepays / delq / CNL for each performance axis."""
+    import matplotlib.pyplot as plt  # noqa: PLC0415
     plt.rcParams.update({'font.size': 8})
-    f, axArr = plt.subplots(3, 6)
-    f.suptitle('ALD Performance Charts')
+    fig, axArr = plt.subplots(3, 6)
+    fig.suptitle('ALD Performance Charts')
 
-    axisStr = ['monthsFromCutoffDate','age','reportingPeriodBeginningDate']
-    cols = ['ABSspeed','Prepays','Delq30','Delq60','Delq90','CNL']
+    axisStr = ['monthsFromCutoffDate', 'age', 'reportingPeriodBeginningDate']
+    cols = ['ABSspeed', 'Prepays', 'Delq30', 'Delq60', 'Delq90', 'CNL']
+    for i, axis in enumerate(axisStr):
+        dtPerf = create_performance(dtPmts, axis, 'Auto Loans')
+        for j, c in enumerate(cols):
+            mask = [c in col for col in dtPerf.columns]
+            ax = axArr[i, j]
+            ax.set_xlabel(axis)
+            legend = (j == 0) and (i == 0)
+            dtPerf.loc[:, mask].plot(kind='line', ax=ax, legend=legend)
+            if legend:
+                ax.legend(bbox_to_anchor=(.75, -2.62), loc=2, borderaxespad=0., ncol=4,
+                          prop={'size': 6})
+            if i == 0:
+                ax.set_title(c)
 
-    for i,axis in enumerate(axisStr):
-        dtPerf = create_performance(dtPmts,axis)
-        for j,c in enumerate(cols):
 
-            print(i,j)
-            colIndx = [c in col for col in dtPerf.columns]
-            axArr[i, j].set_xlabel(axis)
-            if (j == 0) & (i == 0):
-                dtPerf.loc[:,colIndx].plot(kind='line',ax=axArr[i,j],subplots=False,layout=(i,j),legend=True)
-                axArr[i,j].legend(bbox_to_anchor=(.75, -2.62),loc=2,borderaxespad=0.,ncol=4,prop={'size':6})
-            else:
-                dtPerf.loc[:,colIndx].plot(kind='line', ax=axArr[i, j],subplots=False,layout=(i, j),legend=False)
+def plot_model_outputs(auc, oob, rocY, rocX, nTrees, headers, featImp, superTitle):
+    """ROC / variable importance / AUC / OOB error panel for a random-forest run."""
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+    plt.rcParams.update({'font.size': 8})
+    fig, axArr = plt.subplots(2, 2)
+    fig.suptitle(superTitle)
 
-            if (i==0):
-                axArr[i, j].set_title(c)
+    ctClass = [i * 0.01 for i in range(0, 101)]
+    axArr[0, 0].plot(ctClass, ctClass, label='x=y', linestyle=':')
+    for i in range(rocY.shape[0]):
+        axArr[0, 0].plot(rocX, rocY[i, :], label=f"ROC Curve for iTrees:{nTrees[i]}", linewidth=2)
+    axArr[0, 0].set_xlabel('False Positive Rate')
+    axArr[0, 0].set_ylabel('True Positive Rate')
+    axArr[0, 0].set_title('ROCs vs No. of Trees')
 
-            #if (axis == 'reportingPeriodBeginningDate'):
-            #    plt.sca(axArr[i,j])
-            #    newTicks = [dt.datetime.toordinal(d) for d in dtPerf.index]
-            #    plt.xticks(newTicks,dtPerf.index.strftime('%b%y'))
+    tol = const.featTolerance()
+    axArr[0, 1].barh(np.arange(tol) + .5, featImp[:tol], align='center')
+    axArr[0, 1].set_yticks(np.arange(tol) + .5)
+    axArr[0, 1].set_yticklabels(headers[:tol])
+    axArr[0, 1].set_title('Var Importance for No. of Trees Range Mid')
 
-def create_curves(dtPmts,axisStr):
-#axisStr = 'age'
-#axisStr = ['monthsFromCutoffDate','age','reportingPeriodBeginningDate']
-    fieldStr = ['Curr','1mDelq','2mDelq','3mDelq','3m+Delq','Def','PP']
-    primeStates = ['Other','Subprime <640','Nearprime 640-680','Prime 680-740','Superprime >740']
-    dtCurves = pd.DataFrame(np.zeros(shape=(len(dtPmts[axisStr].unique()),len(fieldStr)*len(primeStates))),
-                            columns=np.arange(0,len(fieldStr)*len(primeStates),1))
-    cols=[]
+    axArr[1, 0].plot(list(nTrees), auc)
+    axArr[1, 0].set_xlabel('No. of Trees')
+    axArr[1, 0].set_ylabel('AUC')
+    axArr[1, 0].set_title('AUC vs No. of Trees')
 
-    for p,prime in enumerate(primeStates):
+    axArr[1, 1].plot(list(nTrees), oob)
+    axArr[1, 1].set_xlabel('No. of Trees')
+    axArr[1, 1].set_ylabel('OOB Error')
+    axArr[1, 1].set_title('OOB Error (1-OOB Score) vs No. of Trees')
 
-        print('Creating curve for prime category: %s ...' %prime)
-        dtBal = pd.pivot_table(data=dtPmts.iloc[np.where(dtPmts['primeIndicator']==p)],
-                               values='reportingPeriodBeginningLoanBalanceAmount',columns='monthsDelinquent',index=axisStr, aggfunc=np.sum).fillna(0).cumsum()
-        dtBal = dtBal.div(dtPmts['originalLoanAmount'].iloc[np.where(dtPmts['primeIndicator'] == p)].sum(),axis=0).fillna(method='ffill')
-        dtCurves[dtBal.columns.values + len(fieldStr) * p] = dtBal
 
-        cols += [prime + ' ' + field for field in fieldStr]
+# ---------------------------------------------------------------------------
+# Random-forest heatmap (optional — lazy import sklearn)
+# ---------------------------------------------------------------------------
 
-    dtCurves.columns = cols
-    dtCurves = dtCurves.fillna(method='ffill')
+def generate_regressors(dtR: pd.DataFrame) -> pd.DataFrame:
+    """One-hot / decile-bucket a numeric/string DataFrame for tree models.
 
-    # Reorder columns by name
-    cols = []
-    for s in ['PP','Def','1mDelq','2mDelq','3mDelq','3m+Delq']:
-        cols = np.append(cols,[c for c in dtCurves.columns if s in c ])
-
-    return dtCurves[cols]
-
-def create_rollrates_matrix(dtPmts):
-
-    dtMatrix = np.zeros(shape=(len(const.rrCols()), len(const.rrCols())))
-
-    for stState in np.sort(dtPmts['monthsDelinquent'].unique()):
-        for endState in np.sort(dtPmts['monthsDelinquent'].unique()):
-            #print(stState,endState)
-            preIndx = np.where(np.logical_and(dtPmts['monthsDelinquent'] == stState, dtPmts['summaryDate'] == 0))
-            postIndx = preIndx[0][np.where(dtPmts['monthsDelinquent'].iloc[preIndx[0] + 1] == endState)]
-            if (dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[preIndx].sum() != 0):
-                dtMatrix[stState,endState] = dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[postIndx].sum() / dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[preIndx].sum()
-
-    return pd.DataFrame(data=dtMatrix,index=const.rrCols(),columns=const.rrCols())
-
-def create_rollrates_ts(dtPmts,axisStr):
-
-#axisStr = 'age'
-    dtOut = np.zeros(shape=(dtPmts[axisStr].unique()[:-1].shape[0],(len(const.rrCols())-2)*len(const.rrCols())))
-    m = 0
-    cols = list()
-
-    for s in range(0,len(const.rrCols())-2):
-        for e in range(0,len(const.rrCols())):
-            cols.append(const.rrCols()[s] + '-' + const.rrCols()[e])
-            for i,ind in enumerate(np.sort(dtPmts[axisStr].unique()[:-1])):
-                print('Calculating where stState: %s, endState: %s, and axis: %s ... ' %(const.rrCols()[s],const.rrCols()[e],ind))
-                preIndx = np.where(np.logical_and.reduce([dtPmts[axisStr] == ind,
-                                                          dtPmts['monthsDelinquent'] == s,
-                                                          dtPmts['summaryDate'] == 0]))
-                postIndx = preIndx[0][np.where(dtPmts['monthsDelinquent'].iloc[preIndx[0]+1] == e)]
-                if (dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[preIndx].sum() != 0):
-                    dtOut[i,m] = dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[postIndx].sum() / dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[preIndx].sum()
-            m += 1
-
-    return pd.DataFrame(data=dtOut,index=np.sort(dtPmts[axisStr].unique()[:-1]),columns=cols)
-
-def plot_model_outputs(auc,oob,rocY,rocX,nTrees,headers,featImp,superTitle):
-
-    #Plots specific outputs based on method
-
-    plt.rcParams.update({'font.size':8})
-    f, axArr = plt.subplots(2, 2)
-    f.suptitle(superTitle)
-
-    # plot ROC curves
-    ctClass = [i * 0.01 for i in range(0,101,1)]
-    axArr[0,0].plot(ctClass, ctClass, label='x=y',linestyle=':')
-    for i in range(0,rocY.shape[0]):
-        axArr[0,0].plot(rocX, rocY[i,:], label='ROC Curve for iTrees:'+str(nTrees[i]),linewidth=2)
-
-    axArr[0,0].set_xlabel('False Positive Rate')
-    axArr[0,0].set_ylabel('True Positive Rate')
-    axArr[0,0].set_title('ROCs vs No. of Trees')
-    #axArr[0,0].legend(loc='upper center',shadow=False,)
-
-    # plot avg top 10 features by importance
-    axArr[0,1].barh(np.arange(const.featTolerance())+.5,featImp[0:const.featTolerance()],align='center')
-    axArr[0,1].set_yticks(np.arange(const.featTolerance())+.5)
-    axArr[0,1].set_yticklabels(headers[0:const.featTolerance()])
-    axArr[0,1].set_title('Var Importance for No. of Trees Range Mid')
-
-    # plot AUC vs No. of Trees
-    axArr[1,0].plot(list(nTrees),auc)
-    axArr[1,0].set_xlabel('No. of Trees')
-    axArr[1,0].set_ylabel('AUC')
-    axArr[1,0].set_title('AUC vs No. of Trees')
-
-    # plot OOB Errors vs No. of Trees
-    axArr[1,1].plot(list(nTrees),oob)
-    axArr[1,1].set_xlabel('No. of Trees')
-    axArr[1,1].set_ylabel('OOB Error')
-    axArr[1,1].set_title('OOB Error (1-OOB Score) vs No. of Trees')
-
-def generate_regressors(dtR):
-    # Converts input data to classification columns and I tried to drop the columns containing 20% of the non-missing values
-#dtR = dtX
-    cols = []
-    dtOut = np.zeros(shape=(dtR.shape[0],0))
-    sparseCount = dtR.count(axis=0)/dtR.shape[0] # percentage of non-nans in columns
-
-    topTolerance = .9
-    bottomTolerance = .1
-    freqTolerance = .15
-    sparseTolerance = .2
+    Carries forward the original case-splits (frequent value, multi-value,
+    decile-bin, fall-through) and adds a per-column 'is null' indicator when
+    any values are missing.
+    """
+    topTolerance, bottomTolerance = .9, .1
+    freqTolerance, sparseTolerance = .15, .2
     binTolerance = 10
-    bins = range(0,int((1-sparseTolerance)*100),binTolerance)
+    bins = list(range(0, int((1 - sparseTolerance) * 100), binTolerance))
 
-    for i in range(0,dtR.shape[1]):
+    sparseCount = dtR.count(axis=0) / dtR.shape[0]
+    cols: list[str] = []
+    dtOut = np.zeros((dtR.shape[0], 0))
 
-        #print(dtR.columns[i],i)
-        freqTable = dtR.iloc[:,i].value_counts()/dtR.iloc[:,i].count()
+    for i in range(dtR.shape[1]):
+        col_name = dtR.columns.values[i]
+        col_series = dtR.iloc[:, i]
+        freqTable = col_series.value_counts(normalize=True)
 
-        if (freqTable.shape[0] == 0):
-        # Case 0: Column is all nans or blanks
-            print('Case 0, for i = %d ...' %(i))
-
-        elif (freqTable.iloc[0] >= topTolerance) & (sparseCount[i] > sparseTolerance) & (freqTable.shape[0] > 1):
-        # Case 1: If most frequent value is > 90% and column is not sparse, then (is frequent value, is missing)
-            dtTemp = np.zeros(shape=(dtR.shape[0],1))
-            cols.append(dtR.columns.values[i] + "_is: " + str(dtR.iloc[:, i].value_counts().index[0]))
-            dtTemp[np.where(dtR.iloc[:, i] == dtR.iloc[:, i].value_counts().index[0]),0] = 1
-            dtOut = np.concatenate((dtOut, dtTemp), axis=1)
-            print('Case 1, for i = %d ...' %(i))
-
-        elif (bottomTolerance <= freqTable.iloc[0] < topTolerance) & (sparseCount[i] > sparseTolerance) & (freqTable.shape[0] > 1):
-        # Case 2: If most frequent value is in between tolerances and column is not sparse, then (is multiple vals above threshold, is missing)
-
-            uniqCols = freqTable.index[(freqTable > freqTolerance).nonzero()[0]]
+        if freqTable.shape[0] == 0:
+            log.debug("Case 0 (all NaN): %s", col_name)
+        elif (freqTable.iloc[0] >= topTolerance
+              and sparseCount[i] > sparseTolerance
+              and freqTable.shape[0] > 1):
+            cols.append(f"{col_name}_is: {freqTable.index[0]}")
+            block = np.zeros((dtR.shape[0], 1))
+            block[(col_series == freqTable.index[0]).to_numpy(), 0] = 1
+            dtOut = np.concatenate((dtOut, block), axis=1)
+            log.debug("Case 1: %s", col_name)
+        elif (bottomTolerance <= freqTable.iloc[0] < topTolerance
+              and sparseCount[i] > sparseTolerance
+              and freqTable.shape[0] > 1):
+            uniqCols = freqTable.index[(freqTable > freqTolerance).to_numpy().nonzero()[0]]
             if uniqCols.shape[0] == freqTable.shape[0]:
-            # if uniqCols contains all values then drop last one
-                uniqCols = uniqCols[0:uniqCols.shape[0]-1]
-
-            dtTemp = np.zeros(shape=(dtR.shape[0],uniqCols.shape[0]))
-            # pulls values for columns
-
-            for j,u in enumerate(uniqCols): # parse possible values
-                cols.append(dtR.columns.values[i] + "_is: " + str(u))
-                dtTemp[np.where(dtR.iloc[:,i] == u),j] = 1
-                #print '\ni = %d, j = %d' % (i, j)
-
-            dtOut = np.concatenate((dtOut,dtTemp),axis=1)
-            print('Case 2, for i = %d ...' %(i))
-
-        elif (sparseCount[i] > sparseTolerance) & (freqTable.shape[0] > 1):
-        # Case 3: Else numbers are numerical
-            dtTemp = np.zeros(shape=(dtR.shape[0],len(bins)))
-            # divide column into deciles and exclude last 20%
-            for j,u in enumerate(bins):
-                print(j,u)
-                dtTemp[np.where(np.logical_and(dtR.iloc[:,i]>=np.percentile(dtR.iloc[:,i],u),dtR.iloc[:,i]<np.percentile(dtR.iloc[:,i],u+binTolerance))),j] = 1
-                cols.append(dtR.columns.values[i] + "_bin: " + str(u))
-
-            dtOut = np.concatenate((dtOut,dtTemp),axis=1)
-            print('Case 3, for i = %d ...' %(i))
-
+                uniqCols = uniqCols[:-1]
+            block = np.zeros((dtR.shape[0], uniqCols.shape[0]))
+            for j, u in enumerate(uniqCols):
+                cols.append(f"{col_name}_is: {u}")
+                block[(col_series == u).to_numpy(), j] = 1
+            dtOut = np.concatenate((dtOut, block), axis=1)
+            log.debug("Case 2: %s", col_name)
+        elif sparseCount[i] > sparseTolerance and freqTable.shape[0] > 1:
+            block = np.zeros((dtR.shape[0], len(bins)))
+            for j, u in enumerate(bins):
+                lo = np.nanpercentile(col_series, u)
+                hi = np.nanpercentile(col_series, u + binTolerance)
+                in_bin = ((col_series >= lo) & (col_series < hi)).to_numpy()
+                block[in_bin, j] = 1
+                cols.append(f"{col_name}_bin: {u}")
+            dtOut = np.concatenate((dtOut, block), axis=1)
+            log.debug("Case 3: %s", col_name)
         else:
-        # Case 4: Values are either one value or numbers are too sparse - turns out only one column falls into this case, which was dropped
-            print('Case 4, for i = %d ...' %(i))
+            log.debug("Case 4 (too sparse / one-value): %s", col_name)
 
-        if (dtR.iloc[:,i].isnull().sum() > 0) & (dtR.iloc[:,i].isnull().sum() < dtR.shape[0]):
-        # Case 4: Add a column if some values are missing or if there is 1 value and blanks
-            dtTemp = np.zeros(shape=(dtR.shape[0],1))
-            dtTemp[np.where(dtR.iloc[:,i].isnull()),0] = 1
-            cols.append(dtR.columns.values[i] + "_is: null")
-            dtOut = np.concatenate((dtOut,dtTemp),axis=1)
-            print('Adding col for missing vals, for i = %d ...' %(i))
+        n_null = int(col_series.isna().sum())
+        if 0 < n_null < dtR.shape[0]:
+            cols.append(f"{col_name}_is: null")
+            block = np.zeros((dtR.shape[0], 1))
+            block[col_series.isna().to_numpy(), 0] = 1
+            dtOut = np.concatenate((dtOut, block), axis=1)
 
-    print('\nFinished processing input data...')
-    #temp = pd.DataFrame(data=dtOut, index=dtR.index, columns=cols)
-    #temp.to_csv('temp.csv')
-    return pd.DataFrame(data=dtOut,index=dtR.index,columns=cols)
+    log.info("Finished generating regressors (%d columns)", len(cols))
+    return pd.DataFrame(data=dtOut, index=dtR.index, columns=cols)
 
-def create_heatmap(dtPmts,trustStr):
 
-#trustStr = 'Ally Auto Receivables Trust 2017-2'
+def create_heatmap(dtPmts: pd.DataFrame, trustStr: str) -> pd.DataFrame:
+    """Train a random forest on the prime/delq target and return ranked feature importance."""
+    from sklearn import ensemble, metrics  # noqa: PLC0415
 
-    if (trustStr == 'All'):
-        dtX = dtPmts[const.modelFields()]
-        dtX = dtX.sample(frac=const.frac(),replace=True)
+    if trustStr == 'All':
+        dtX = dtPmts[const.modelFields()].sample(frac=const.frac(), replace=True)
     else:
-        trustIndx = np.where(dtPmts['securitizationKey'] == trustStr)
-        dtX = dtPmts[const.modelFields()].iloc[trustIndx]
-
-    Y = np.ravel(np.logical_and(dtPmts['monthsDelinquent'].loc[dtX.index] > 1,dtPmts['monthsDelinquent'].loc[dtX.index] < 6))
+        dtX = dtPmts.loc[dtPmts['securitizationKey'] == trustStr, const.modelFields()]
+    Y = (
+        (dtPmts.loc[dtX.index, 'monthsDelinquent'] > 1)
+        & (dtPmts.loc[dtX.index, 'monthsDelinquent'] < 6)
+    ).to_numpy().ravel()
     dtX = generate_regressors(dtX)
-    #dtX.to_csv('dtX.csv')
 
-    nTrees = range(100,110,10)
-    auc = []
-    oob = []
+    nTrees = range(100, 110, 10)
+    auc: list[float] = []
+    oob: list[float] = []
     rocX = np.arange(0, 1.01, .01)
-    rocY = np.zeros(shape=(len(nTrees), rocX.shape[0]))
+    rocY = np.zeros((len(nTrees), rocX.shape[0]))
+    rfModel = None
 
-    for i,trees in enumerate(nTrees):
-        print('\nUsing Bagging + Random Forests generating trial:%d with trees:%d ...' % (i, trees))
-
-        rfModel = ensemble.RandomForestClassifier(n_estimators=trees, max_depth=const.maxDepth(),max_features='auto',
-                                            bootstrap=True,oob_score=True,random_state=531,min_samples_leaf=const.maxLeaf())
-        rfModel.fit(dtX,Y)
+    for i, trees in enumerate(nTrees):
+        log.info("RF trial %d trees=%d", i, trees)
+        rfModel = ensemble.RandomForestClassifier(
+            n_estimators=trees, max_depth=const.maxDepth(),
+            max_features='sqrt', bootstrap=True, oob_score=True,
+            random_state=531, min_samples_leaf=const.maxLeaf(),
+        )
+        rfModel.fit(dtX, Y)
         predVector = rfModel.predict_proba(dtX)
-
-        # generate ROC, AUC, OOB, and feature importance diagnostic stats
-        if (predVector.shape[1] > 1):
-
-            fpr, tpr, thresh = metrics.roc_curve(Y, predVector[:,1])
-            rocY[i,:] = np.interp(rocX,fpr,tpr)
-
+        if predVector.shape[1] > 1:
+            fpr, tpr, _ = metrics.roc_curve(Y, predVector[:, 1])
+            rocY[i, :] = np.interp(rocX, fpr, tpr)
             auc.append(metrics.roc_auc_score(Y, predVector[:, 1]))
-            oob.append(1-rfModel.oob_score_)
-
+            oob.append(1 - rfModel.oob_score_)
         else:
-            print('No model because there are no differences in the Y values in the test set ...')
+            log.warning("No model differences in Y for trial %d", i)
 
-    #plot_model_outputs(auc,oob,rocY,rocX,nTrees,dtX.columns.values[featImpIndx],featImp[featImpIndx],'Bagging + Random Forest Model')
+    if rfModel is None:
+        return pd.DataFrame(columns=['colName', 'colImp'])
 
     featImp = rfModel.feature_importances_ / rfModel.feature_importances_.max()
-    featImpIndx = np.argsort(featImp)[::-1]
+    order = np.argsort(featImp)[::-1]
+    return pd.DataFrame({
+        'colName': dtX.columns.values[order],
+        'colImp': featImp[order],
+    })
 
-    return pd.DataFrame(data=np.concatenate((np.expand_dims(dtX.columns.values[featImpIndx], axis=1),
-                                             np.expand_dims(featImp[featImpIndx], axis=1)),axis=1),
-                                            columns=['colName', 'colImp'])
 
-def get_heatmap_cols(dtCol):
-#dtCol = dtPmts['loanToValueRatio']
-    dtHist = np.zeros(shape=(dtCol.shape[0],1))
-
-    if (np.issubdtype(dtCol.dtype, np.number)) & (dtCol.unique().shape[0] > const.intNo()):
-        intLength = (dtCol.max() - dtCol.min()) / const.intNo()
-        startNo = float(dtCol.min()) + np.arange(0, const.intNo(), 1) * intLength
-        endNo = float(dtCol.min()) + np.arange(1, const.intNo() + 1, 1) * intLength
-        categoryList = [str("{0:.1f}".format(startNo[i]))+'-'+str("{0:.1f}".format(endNo[i])) for i in range(0,const.intNo())]
-        for c in range(0, const.intNo()):
-            rowIndx = np.where(np.logical_and.reduce([dtCol>=startNo[c],dtCol< endNo[c],np.isnan(dtCol) == False]))
-            dtHist[rowIndx,0] = c
+def get_heatmap_cols(dtCol: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    """Bucket a column for heatmap display. Returns (bucket-index, label) arrays."""
+    dtHist = np.zeros((dtCol.shape[0], 1))
+    if np.issubdtype(dtCol.dtype, np.number) and dtCol.nunique(dropna=True) > const.intNo():
+        lo = float(dtCol.min())
+        hi = float(dtCol.max())
+        step = (hi - lo) / const.intNo()
+        starts = lo + np.arange(0, const.intNo()) * step
+        ends = lo + np.arange(1, const.intNo() + 1) * step
+        labels = [f"{s:.1f}-{e:.1f}" for s, e in zip(starts, ends)]
+        for c, (s, e) in enumerate(zip(starts, ends)):
+            in_bin = ((dtCol >= s) & (dtCol < e) & dtCol.notna()).to_numpy()
+            dtHist[in_bin, 0] = c
     else:
-        categoryList = np.sort(dtCol.unique())
-        for c in range(0,len(categoryList)):
-            #print(c)
-            rowIndx = np.where(dtCol == categoryList[c])
-            dtHist[rowIndx,0] = c
+        labels = list(np.sort(dtCol.dropna().unique()))
+        for c, lab in enumerate(labels):
+            dtHist[(dtCol == lab).to_numpy(), 0] = c
+    return dtHist, np.array(labels)
 
-    return dtHist,np.array(categoryList)
 
-def plot_heatmaps(dtPmts,dtImp,trustStr):
-#trustStr = 'Santander Drive Auto Receivables Trust 2017-1'
+def plot_heatmaps(dtPmts: pd.DataFrame, dtImp: pd.DataFrame, trustStr: str) -> pd.DataFrame:
+    """Plot per-trust feature-interaction heatmaps. Saves to Heatmaps/{trust}.png."""
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+    import seaborn as sns  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
 
-    dtTrust = dtPmts.iloc[np.where(dtPmts['securitizationKey'] == trustStr)]
-
+    dtTrust = dtPmts.loc[dtPmts['securitizationKey'] == trustStr]
     plt.rcParams.update({'font.size': 6})
-    f, axArr = plt.subplots(2, 3)
-    f.suptitle('Important Features Heatmaps for ' + trustStr + ' (Z = Mean of Def + Delq > 1m)')
+    fig, axArr = plt.subplots(2, 3)
+    fig.suptitle(f'Important Features Heatmaps for {trustStr} (Z = Mean of Def + Delq > 1m)')
 
-    dtImp['fieldname'] = np.array([f[0:f.find('_',0,len(f))] for f in dtImp['colName'].values])
-    dropIndx = np.where(np.in1d(dtImp['fieldname'],const.badFields()))
-    dtImp = dtImp.drop(dtImp.index[dropIndx],axis=0)
+    dtImp = dtImp.copy()
+    dtImp['fieldname'] = [f.split('_', 1)[0] for f in dtImp['colName'].values]
+    drop = np.isin(dtImp['fieldname'], const.badFields())
+    dtImp = dtImp.loc[~drop]
     fieldsList = dtImp['fieldname'].drop_duplicates(keep='first').iloc[:4].values
-    impactFields = fieldsList
+    impactFields = fieldsList.copy()
 
-    fieldsList = list(it.combinations(fieldsList,2))
-    delqIndx = np.where(np.logical_and(dtTrust['monthsDelinquent'] > 1,dtTrust['monthsDelinquent'] < 6))
-
-    for fieldsIndx,fields in enumerate(fieldsList):
-
-        print('Creating heatmap for fields: %s ... '%str(fields))
-        i = fieldsIndx//3
-        j = fieldsIndx%3
-
-        dtHeatmap = pd.DataFrame(data=np.zeros(shape=(dtTrust.shape[0], 3)),index=dtTrust.index,columns=[fields[0],fields[1],'BadHombres'])
-        dtHeatmap[fields[0]], xCat = get_heatmap_cols(dtTrust[fields[0]])
-        dtHeatmap[fields[1]], yCat = get_heatmap_cols(dtTrust[fields[1]])
-        dtHeatmap['BadHombres'].iloc[delqIndx] = 1
-
-        dtHeatmap = pd.pivot_table(data=dtHeatmap,index=fields[0],columns=fields[1],values='BadHombres')
-        dtHeatmap.index = xCat[dtHeatmap.index.values.astype(int)]
-        dtHeatmap.columns = yCat[dtHeatmap.columns.values.astype(int)]
-
+    pairs = list(it.combinations(fieldsList, 2))
+    delq_mask = (dtTrust['monthsDelinquent'] > 1) & (dtTrust['monthsDelinquent'] < 6)
+    for idx, (fa, fb) in enumerate(pairs):
+        log.info("Heatmap for %s x %s", fa, fb)
+        i, j = idx // 3, idx % 3
+        xCol, xCat = get_heatmap_cols(dtTrust[fa])
+        yCol, yCat = get_heatmap_cols(dtTrust[fb])
+        bad = delq_mask.astype(float).to_numpy().reshape(-1)
+        dtHeatmap = pd.DataFrame({fa: xCol.ravel(), fb: yCol.ravel(), 'BadHombres': bad})
+        pivot = pd.pivot_table(data=dtHeatmap, index=fa, columns=fb, values='BadHombres')
+        pivot.index = xCat[pivot.index.astype(int)]
+        pivot.columns = yCat[pivot.columns.astype(int)]
         sns.set(font_scale=.75)
-        sns.heatmap(data=dtHeatmap,xticklabels=True,yticklabels=True,ax=axArr[fieldsIndx//3,fieldsIndx%3],annot=True,annot_kws={"size":6},cbar=False)
-        axArr[i,j].set_xlabel(fields[1],fontsize=7)
-        axArr[i,j].set_ylabel(fields[0],fontsize=7)
-        axArr[i,j].set_xticklabels(axArr[i,j].get_xticklabels(),rotation=25, fontsize=6)
-        axArr[i,j].set_yticklabels(axArr[i,j].get_yticklabels(),rotation=45, fontsize=6)
+        sns.heatmap(data=pivot, xticklabels=True, yticklabels=True,
+                    ax=axArr[i, j], annot=True, annot_kws={"size": 6}, cbar=False)
+        axArr[i, j].set_xlabel(fb, fontsize=7)
+        axArr[i, j].set_ylabel(fa, fontsize=7)
+        axArr[i, j].set_xticklabels(axArr[i, j].get_xticklabels(), rotation=25, fontsize=6)
+        axArr[i, j].set_yticklabels(axArr[i, j].get_yticklabels(), rotation=45, fontsize=6)
 
-    plt.savefig('Heatmaps/'+ trustStr + '.png',dpi=200)
+    out_dir = Path(__file__).resolve().parent / 'Heatmaps'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_dir / f"{trustStr}.png", dpi=200)
     plt.close()
+    return pd.DataFrame(data=impactFields, columns=[trustStr],
+                        index=np.arange(0, impactFields.shape[0]))
 
-    return pd.DataFrame(data=impactFields,columns=[trustStr],index=np.arange(0,impactFields.shape[0],1))
 
-def run_heatmaps(dtPmts):
-
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    #s = 'Santander Drive Auto Receivables Trust 2017-1'
+def run_heatmaps(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """Run create_heatmap + plot_heatmaps for every securitization."""
+    sec_keys = np.sort(dtPmts['securitizationKey'].dropna().unique())
     dtFields = pd.DataFrame()
-
-    for s in secKeys:
-        print(s)
-        dtImp = create_heatmap(dtPmts,s)
-        if (dtImp['colImp'].isnull().all() == False):
-            dtFields = pd.concat([dtFields,plot_heatmaps(dtPmts,dtImp,s)],axis=1)
-
+    for s in sec_keys:
+        log.info("Heatmap for %s", s)
+        dtImp = create_heatmap(dtPmts, s)
+        if not dtImp['colImp'].isna().all():
+            dtFields = pd.concat([dtFields, plot_heatmaps(dtPmts, dtImp, s)], axis=1)
     return dtFields
 
-def describe_data(dtPmts):
 
-    dtPmts = dtPmts.drop(['subvented', 'modificationTypeCode'], axis=1)
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    dtDesc = pd.DataFrame()
-
-    for s in secKeys:
-        print(s)
-        secIndx = np.where(dtPmts['securitizationKey']==s)
-        dtTemp = dtPmts.iloc[secIndx].describe(percentiles=[.25, .5, .75], exclude=[np.number])
-        dtTemp.index = s + ' ' + dtTemp.index
-        dtDesc = pd.concat([dtDesc,dtTemp],axis=0)
-
-    dtDesc.to_csv('dtDesc.csv')
-
-def main(argv = sys.argv):
-
-create_summary(dtPmts).to_csv('dtSumm.csv')
-create_comparison(dtPmts).to_csv('dtComp.csv')
-pd.concat([create_performance(dtPmts,'monthsFromCutoffDate','Auto Loans'),create_performance(dtPmts,'reportingPeriodBeginningDate','Auto Loans'),create_performance(dtPmts,'age','Auto Loans')],axis=0).to_csv('dtPerf.csv')
-create_performance(dtPmts,'monthsFromCutoffDate','Auto Leases')
-plot_performance(dtPmts)
-
-create_curves(dtPmts,'age').to_csv('dtc.csv')
-create_rollrates_ts(dtPmts,'age').to_csv('rrts.csv')
-create_rollrates_matrix(dtPmts).to_csv('rrmat.csv')
-
-dtFields = run_heatmaps(dtPmts)
-
-dtImp = create_heatmap(dtPmts,'GM Financial Automobile Leasing Trust 2017-1')
-plot_heatmaps(dtPmts,dtImp,'GM Financial Automobile Leasing Trust 2017-1')
-
-ii = np.where(dtRaw['vehicleManufacturerName'] == 'MERC')
-dtRaw.iloc[ii].to_csv('merc.csv')
-
-if __name__ == "__main__":
-    sys.exit(main())
+def describe_data(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """Per-securitization ``.describe()`` over non-numeric fields, saved as CSV."""
+    df = dtPmts.drop(columns=[c for c in ('subvented', 'modificationTypeCode')
+                              if c in dtPmts.columns])
+    sec_keys = np.sort(df['securitizationKey'].dropna().unique())
+    parts = []
+    for s in sec_keys:
+        log.info("Describe %s", s)
+        sec = df.loc[df['securitizationKey'] == s]
+        try:
+            piece = sec.describe(percentiles=[.25, .5, .75], exclude=[np.number])
+        except (ValueError, TypeError):
+            piece = pd.DataFrame()
+        piece.index = [f"{s} {idx}" for idx in piece.index]
+        parts.append(piece)
+    out = pd.concat(parts, axis=0) if parts else pd.DataFrame()
+    return out

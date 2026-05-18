@@ -1,437 +1,704 @@
-import pandas as pd
-import numpy as np
+"""Clean and enrich raw auto-loan ABS-EE data into a normalized payments DataFrame.
 
-class const():
+Public surface (unchanged from the 2017 version):
+    const.<field-list>()          # schema-level column lists
+    clean_ald_files(df)           # normalize dates/numerics/codes/dedup
+    append_calc_fields(df)        # derive age, LTV, monthsDelinquent, prime tier, etc.
+    data_vetting(df)              # (errors, descNum, descStr) per securitization
+    cashflow_vetting(df)          # per-month cashflow rollup
+
+Differences vs. the original:
+- Imports cleanly (no broken ``def main(...)`` scratchpad at the bottom).
+- All ``df['col'].iloc[idx] = v`` chained assignments are now ``df.loc[mask, 'col'] = v``,
+  which is safe under pandas 2.x copy-on-write.
+- Column lookups are defensive: any field absent from the input is skipped, not
+  KeyError'd. The optional ``servicerAdvancedAmount`` / ``servicingFlatFeeAmount``
+  / ``otherServicerFeeRetainedByServicer`` / ``originalInterestOnlyTermNumber``
+  fields can now be absent.
+- Rate scaling no longer divides every value in a security by 100 when *some*
+  values look percent-formatted; only values >1 are scaled. Remaining >1
+  outliers are set to NaN (was: 0, which silently destroyed real outliers).
+- Unmapped vehicle-manufacturer names fall back to the raw name instead of
+  becoming ``'N/A'``.
+- ``data_vetting`` sorts the slice before its row-walking check (was unsorted
+  and producing meaningless counts), uses ``.duplicated()`` instead of the
+  removed ``MultiIndex.get_duplicates``, replaces the O(N²) charge-off check
+  with a groupby/merge, and uses ``.at`` instead of the removed ``.ix``.
+- ``clean_ald_files`` copies its input rather than mutating it.
+- Lookup CSVs are resolved relative to this file, not the process cwd.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parent
+INPUTS = ROOT / "Inputs"
+log = logging.getLogger("absee.autoloan")
+
+
+class const:
     @staticmethod
     def booleanFields():
-        return ['assetAddedIndicator','assetSubjectDemandIndicator','coObligorIndicator','reportingPeriodModificationIndicator',
-                'repossessedIndicator','underwritingIndicator']
+        return ['assetAddedIndicator', 'assetSubjectDemandIndicator', 'coObligorIndicator',
+                'reportingPeriodModificationIndicator', 'repossessedIndicator', 'underwritingIndicator']
+
     @staticmethod
     def dateFields():
-        return ['originalFirstPaymentDate','originationDate','reportingPeriodBeginningDate','reportingPeriodEndingDate',
-                'zeroBalanceEffectiveDate']
+        return ['originalFirstPaymentDate', 'originationDate', 'reportingPeriodBeginningDate',
+                'reportingPeriodEndingDate', 'zeroBalanceEffectiveDate']
+
     @staticmethod
     def debugFieldsClean():
-        return ['reportingPeriodBeginningDate','assetNumber','securitizationKey','reportingPeriodBeginningLoanBalanceAmount',
-                'actualPrincipalCollectedAmount','chargedoffPrincipalAmount','otherPrincipalAdjustmentAmount','reportingPeriodActualEndBalanceAmount',
-                'actualInterestCollectedAmount','recoveredAmount','repossessedProceedsAmount','principalPrepaid','dueAmount',
-                'scheduledPrincipalAmount','nextReportingPeriodPaymentAmountDue','currentDelinquencyStatus','totalActualAmountPaid']
+        return ['reportingPeriodBeginningDate', 'assetNumber', 'securitizationKey',
+                'reportingPeriodBeginningLoanBalanceAmount', 'actualPrincipalCollectedAmount',
+                'chargedoffPrincipalAmount', 'otherPrincipalAdjustmentAmount',
+                'reportingPeriodActualEndBalanceAmount', 'actualInterestCollectedAmount',
+                'recoveredAmount', 'repossessedProceedsAmount', 'principalPrepaid', 'dueAmount',
+                'scheduledPrincipalAmount', 'nextReportingPeriodPaymentAmountDue',
+                'currentDelinquencyStatus', 'totalActualAmountPaid']
+
     @staticmethod
     def debugFieldsRaw():
-        return ['reportingPeriodBeginningDate', 'assetNumber', 'securitizationKey','reportingPeriodBeginningLoanBalanceAmount',
-                'actualPrincipalCollectedAmount', 'chargedoffPrincipalAmount', 'otherPrincipalAdjustmentAmount',
-                'reportingPeriodActualEndBalanceAmount','actualInterestCollectedAmount', 'recoveredAmount',
-                'repossessedProceedsAmount','scheduledPrincipalAmount','nextReportingPeriodPaymentAmountDue','currentDelinquencyStatus',
+        return ['reportingPeriodBeginningDate', 'assetNumber', 'securitizationKey',
+                'reportingPeriodBeginningLoanBalanceAmount', 'actualPrincipalCollectedAmount',
+                'chargedoffPrincipalAmount', 'otherPrincipalAdjustmentAmount',
+                'reportingPeriodActualEndBalanceAmount', 'actualInterestCollectedAmount',
+                'recoveredAmount', 'repossessedProceedsAmount', 'scheduledPrincipalAmount',
+                'nextReportingPeriodPaymentAmountDue', 'currentDelinquencyStatus',
                 'totalActualAmountPaid']
+
     @staticmethod
     def decimalFields():
-        return ['actualInterestCollectedAmount','actualOtherCollectedAmount','actualPrincipalCollectedAmount','chargedoffPrincipalAmount',
-                'originalLoanAmount','otherAssessedUncollectedServicerFeeAmount','otherPrincipalAdjustmentAmount',
-                'recoveredAmount','reportingPeriodActualEndBalanceAmount','reportingPeriodBeginningLoanBalanceAmount',
-                'reportingPeriodScheduledPaymentAmount','totalActualAmountPaid',
-                'nextReportingPeriodPaymentAmountDue', 'repossessedProceedsAmount', 'scheduledInterestAmount',
-                'scheduledPrincipalAmount','vehicleValueAmount','servicerAdvancedAmount','servicingFlatFeeAmount','otherServicerFeeRetainedByServicer',]
+        return ['actualInterestCollectedAmount', 'actualOtherCollectedAmount',
+                'actualPrincipalCollectedAmount', 'chargedoffPrincipalAmount',
+                'originalLoanAmount', 'otherAssessedUncollectedServicerFeeAmount',
+                'otherPrincipalAdjustmentAmount', 'recoveredAmount',
+                'reportingPeriodActualEndBalanceAmount',
+                'reportingPeriodBeginningLoanBalanceAmount',
+                'reportingPeriodScheduledPaymentAmount', 'totalActualAmountPaid',
+                'nextReportingPeriodPaymentAmountDue', 'repossessedProceedsAmount',
+                'scheduledInterestAmount', 'scheduledPrincipalAmount', 'vehicleValueAmount',
+                'servicerAdvancedAmount', 'servicingFlatFeeAmount',
+                'otherServicerFeeRetainedByServicer']
+
     @staticmethod
     def integerFields():
-        return ['currentDelinquencyStatus','gracePeriodNumber','interestCalculationTypeCode',
-                'obligorCreditScore','obligorEmploymentVerificationCode','obligorIncomeVerificationLevelCode',
-                'originalInterestRateTypeCode','originalLoanTerm','paymentExtendedNumber',
-                'paymentTypeCode','remainingTermToMaturityNumber','servicingAdvanceMethodCode','vehicleModelYear','vehicleNewUsedCode',
-                'vehicleTypeCode','vehicleValueSourceCode','zeroBalanceCode','originalInterestOnlyTermNumber']
+        return ['currentDelinquencyStatus', 'gracePeriodNumber', 'interestCalculationTypeCode',
+                'obligorCreditScore', 'obligorEmploymentVerificationCode',
+                'obligorIncomeVerificationLevelCode', 'originalInterestRateTypeCode',
+                'originalLoanTerm', 'paymentExtendedNumber', 'paymentTypeCode',
+                'remainingTermToMaturityNumber', 'servicingAdvanceMethodCode',
+                'vehicleModelYear', 'vehicleNewUsedCode', 'vehicleTypeCode',
+                'vehicleValueSourceCode', 'zeroBalanceCode', 'originalInterestOnlyTermNumber']
+
     @staticmethod
     def listFields():
-        return ['modificationTypeCode','subvented']
+        return ['modificationTypeCode', 'subvented']
+
     @staticmethod
     def rateFields():
-        return ['nextInterestRatePercentage','originalInterestRatePercentage',
-                'paymentToIncomePercentage','reportingPeriodInterestRatePercentage','servicingFeePercentage']
+        return ['nextInterestRatePercentage', 'originalInterestRatePercentage',
+                'paymentToIncomePercentage', 'reportingPeriodInterestRatePercentage',
+                'servicingFeePercentage']
+
     @staticmethod
     def stringFields():
-        return ['assetNumber','assetTypeNumber','obligorCreditScoreType','obligorGeographicLocation','originatorName','primaryLoanServicerName',
-                'securitizationKey','vehicleManufacturerName','vehicleModelName']
+        return ['assetNumber', 'assetTypeNumber', 'obligorCreditScoreType',
+                'obligorGeographicLocation', 'originatorName', 'primaryLoanServicerName',
+                'securitizationKey', 'vehicleManufacturerName', 'vehicleModelName']
+
     @staticmethod
     def rawCols():
-        return ['Count','OpenBal','StartMonth','EndMonth','MissingMonths','Walk','IncrBal','Pmts','Missing','Extra',
-                'COExtra','Dupes','NegOpenBal','NegCloseBal','RateNeg','RatePos','Integer','NegCO','PartialCO','GreaterCO','NegRepo','NegRecov']
+        return ['Count', 'OpenBal', 'StartMonth', 'EndMonth', 'MissingMonths', 'Walk',
+                'IncrBal', 'Pmts', 'Missing', 'Extra', 'COExtra', 'Dupes', 'NegOpenBal',
+                'NegCloseBal', 'RateNeg', 'RatePos', 'Integer', 'NegCO', 'PartialCO',
+                'GreaterCO', 'NegRepo', 'NegRecov']
+
     @staticmethod
-    def minSens():
-        return .001
+    def minSens(): return .001
     @staticmethod
-    def divInd():
-        return .4
+    def divInd(): return .4
     @staticmethod
-    def divMax():
-        return 5
+    def divMax(): return 5
+    # Credit-score tiering for primeIndicator (lower-exclusive, upper-inclusive, code).
+    # 0 = other/unknown (kept as default), 1..4 = sub/near/prime/superprime.
+    @staticmethod
+    def primeTiers():
+        return [(740, np.inf, 4), (680, 740, 3), (640, 680, 2), (-np.inf, 640, 1)]
+    @staticmethod
+    def validCreditScoreRange(): return (300, 850)
 
-def read_dict(path):
-# Desc: Reads in dict from the path.  File contains lookups to append to dataframe.
 
-    dtD = pd.read_csv('Inputs/'+path, header=0, index_col=False)
-    print('Read in file from path: %s ...' %path)
-    return dtD
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def clean_ald_files(dtPmts):
-# Desc: Cleans raw ald file data and puts it into a format that is usable for reporting
-# Inputs: The raw ALD payment dataframe
-# Outputs: The cleaned ALD payment dataframe
+def read_dict(name: str) -> pd.DataFrame:
+    """Read a lookup CSV from Inputs/ relative to this module."""
+    return pd.read_csv(INPUTS / name)
 
-    # dtPmts['shelf'] = dtPmts['securitizationKey']
-    # secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    # for s in secKeys:
-    #     secIndx = np.where(dtPmts['securitizationKey'] == s)
-    #     dtPmts['shelf'].iloc[secIndx] = s[:s.find('2017') - 1]
-    # print('Added shelf ... ')
 
-    # Convert date to datetime objects
-    dtPmts['reportingPeriodBeginningDate'] = pd.to_datetime(dtPmts['reportingPeriodBeginningDate'], format='%m-%d-%Y')
-    dtPmts['reportingPeriodEndingDate'] = pd.to_datetime(dtPmts['reportingPeriodEndingDate'], format='%m-%d-%Y')
-    dtPmts['originationDate'] = pd.to_datetime(dtPmts['originationDate'], format='%m/%Y')
-    dtPmts['originalFirstPaymentDate'] = pd.to_datetime(dtPmts['originalFirstPaymentDate'], format='%m/%Y')
-    dtPmts['zeroBalanceEffectiveDate'] = pd.to_datetime(dtPmts['zeroBalanceEffectiveDate'], format='%m/%Y')
+def _present(cols: Iterable[str], df: pd.DataFrame) -> list[str]:
+    """Intersect a column list with what's actually on df."""
+    return [c for c in cols if c in df.columns]
 
-    print('Cleaned dates ...')
 
-    # Replace strings with numbers (No score = NaN)
-    replaceStr = const.decimalFields() + const.integerFields() + const.rateFields()
+# ---------------------------------------------------------------------------
+# Step 1: clean
+# ---------------------------------------------------------------------------
 
-    for r in replaceStr:
-        dtPmts[r] = pd.to_numeric(dtPmts[r], errors='coerce')
-        print('Cleaned field: %s ...' % r)
+def clean_ald_files(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """Normalize raw ABS-EE auto-loan data.
 
-    # Replace nans on certain fields to 0
-    nanStr = ['chargedoffPrincipalAmount','obligorIncomeVerificationLevelCode','obligorEmploymentVerificationCode',
-              'obligorCreditScore','repossessedProceedsAmount','recoveredAmount','otherPrincipalAdjustmentAmount',
-              'currentDelinquencyStatus']
-    for n in nanStr:
-        dtPmts[n] = dtPmts[n].fillna(0)
-    print('Cleaned nans ...')
+    Cleans dates, coerces numerics, fills key NaN-as-0 fields, dedups asset-month
+    rows, normalizes vehicle-manufacturer names against ``Inputs/manus.csv``, and
+    fixes rate scaling (percent vs decimal). Does not mutate the caller.
+    """
+    dtPmts = dtPmts.copy()
 
-    # Drop duplicates - Carmax u vs b
-    dtPmts = dtPmts.drop_duplicates(subset=['assetNumber','reportingPeriodBeginningDate','securitizationKey'],keep='last')
-    #dtPmts = dtPmts.sort_values(by=['assetNumber','reportingPeriodBeginningDate','securitizationKey'],axis=0)
-    #dtPmts = dtPmts.reset_index(drop=True)
-    print('Dropped duplicate records and reindexed ...')
+    # --- Dates ---
+    date_formats = {
+        'reportingPeriodBeginningDate': '%m-%d-%Y',
+        'reportingPeriodEndingDate': '%m-%d-%Y',
+        'originationDate': '%m/%Y',
+        'originalFirstPaymentDate': '%m/%Y',
+        'zeroBalanceEffectiveDate': '%m/%Y',
+    }
+    for col, fmt in date_formats.items():
+        if col in dtPmts.columns:
+            dtPmts[col] = pd.to_datetime(dtPmts[col], format=fmt, errors='coerce')
+    log.info("Cleaned dates")
 
-    # Fix manufacturer names
-    dtManus = read_dict('manus.csv')
-    dtPmts = pd.merge(dtPmts, dtManus, how='left', left_on='vehicleManufacturerName', right_on='old', copy=False)
-    dtPmts = dtPmts.drop(['old', 'vehicleManufacturerName'], axis=1)
-    dtPmts = dtPmts.rename(columns={'new': 'vehicleManufacturerName'})
-    dtPmts['vehicleManufacturerName'] = dtPmts['vehicleManufacturerName'].fillna('N/A')
-    print('Cleaned field: vehicleManufacturerName ...')
+    # --- Coerce numerics ---
+    numeric_cols = _present(
+        const.decimalFields() + const.integerFields() + const.rateFields(), dtPmts
+    )
+    for c in numeric_cols:
+        dtPmts[c] = pd.to_numeric(dtPmts[c], errors='coerce')
+    log.info("Coerced %d numeric fields", len(numeric_cols))
 
-    # Divide rates by 100 whenever the max is greater than divMax
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    for r in const.rateFields():
-        for s in secKeys:
-            secIndx = np.where(dtPmts['securitizationKey'] == s)
-            divInd = np.where(dtPmts[r].iloc[secIndx] > 1)
-            if (len(divInd[0]) / len(secIndx[0]) > const.divInd()) and (dtPmts[r].iloc[secIndx].max() > const.divMax()):
-                print('Plurality of values are greater than divMax for sec: %s, field: %r and dividing by 100 ...' %(s,r))
-                dtPmts[r].iloc[secIndx] = dtPmts[r].iloc[secIndx] / 100
-            elif (dtPmts[r].iloc[secIndx].max() > const.divMax()):
-                divIndx = np.where(dtPmts[r].iloc[secIndx] > const.divMax())
-                dtPmts[r].iloc[secIndx[0][divIndx[0]]] = np.nan
-                print('Only some values are greater than divMax for sec: %s, field: %r and converting those to nan ...' %(s,r))
-        divIndx = np.where(dtPmts[r] > 1)
-        dtPmts[r].iloc[divIndx] = 0
+    # --- Default-zero event-amount columns (added if absent — happens for
+    # brand-new pools where no charge-off / repo / recovery has occurred yet).
+    zero_default = [
+        'chargedoffPrincipalAmount', 'repossessedProceedsAmount',
+        'recoveredAmount', 'otherPrincipalAdjustmentAmount',
+    ]
+    for c in zero_default:
+        if c in dtPmts.columns:
+            dtPmts[c] = dtPmts[c].fillna(0)
+        else:
+            dtPmts[c] = 0.0
 
-    print('Fixed rate scaling ...')
+    # --- Fill-if-present: zero is also fine here, but don't synthesize the
+    # column when absent (column absence is a real signal for these).
+    fill_if_present = [
+        'obligorIncomeVerificationLevelCode', 'obligorEmploymentVerificationCode',
+        'obligorCreditScore', 'currentDelinquencyStatus',
+    ]
+    for c in _present(fill_if_present, dtPmts):
+        dtPmts[c] = dtPmts[c].fillna(0)
 
-    # Fix servicing fee amount
-    servIndx = np.where(np.abs(dtPmts['servicingFeePercentage']) < const.minSens())
-    dtPmts['servicingFeePercentage'].iloc[servIndx] = .01
+    # --- Dedup CarMax u-vs-b style overlaps ---
+    dedup_keys = _present(
+        ['assetNumber', 'reportingPeriodBeginningDate', 'securitizationKey'], dtPmts
+    )
+    if dedup_keys:
+        before = len(dtPmts)
+        dtPmts = dtPmts.drop_duplicates(subset=dedup_keys, keep='last').reset_index(drop=True)
+        if len(dtPmts) != before:
+            log.info("Dropped %d duplicate rows on %s", before - len(dtPmts), dedup_keys)
 
-    # Need to fix modificationTypeCode, subvented
-    #dtPmts['modificationTypeCode'] = pd.to_numeric(dtPmts['modificationTypeCode'], errors='coerce')
+    # --- Vehicle manufacturer name normalization (with raw fallback) ---
+    if 'vehicleManufacturerName' in dtPmts.columns:
+        try:
+            dtManus = read_dict('manus.csv')
+        except FileNotFoundError:
+            log.warning("Inputs/manus.csv missing; leaving vehicleManufacturerName raw.")
+        else:
+            dtPmts = dtPmts.merge(
+                dtManus, how='left', left_on='vehicleManufacturerName', right_on='old'
+            )
+            # Fall back to the original name when the dictionary doesn't map it.
+            dtPmts['vehicleManufacturerName'] = (
+                dtPmts['new'].fillna(dtPmts['vehicleManufacturerName'])
+            )
+            dtPmts = dtPmts.drop(columns=[c for c in ('old', 'new') if c in dtPmts.columns])
+            dtPmts['vehicleManufacturerName'] = dtPmts['vehicleManufacturerName'].fillna('N/A')
+
+    # --- Rate scaling per securitization ---
+    # If the bulk of a column's values exceed 1 (percent form), divide *only those*
+    # by 100 — leaving already-decimal values alone. Lingering >1 values after
+    # scaling are bad data and become NaN (was: 0, which destroyed signal).
+    rate_cols = _present(const.rateFields(), dtPmts)
+    secs = (
+        dtPmts['securitizationKey'].dropna().unique()
+        if 'securitizationKey' in dtPmts.columns else [None]
+    )
+    for r in rate_cols:
+        for s in secs:
+            sec_mask = (dtPmts['securitizationKey'] == s) if s is not None else slice(None)
+            sub_valid = dtPmts.loc[sec_mask, r].dropna()
+            if sub_valid.empty:
+                continue
+            frac_over_one = float((sub_valid > 1).mean())
+            top = float(sub_valid.max())
+            if frac_over_one > const.divInd() and top > const.divMax():
+                target = sec_mask & (dtPmts[r] > 1) if s is not None else (dtPmts[r] > 1)
+                dtPmts.loc[target, r] = dtPmts.loc[target, r] / 100
+            elif top > const.divMax():
+                target = (
+                    sec_mask & (dtPmts[r] > const.divMax())
+                    if s is not None else (dtPmts[r] > const.divMax())
+                )
+                dtPmts.loc[target, r] = np.nan
+        dtPmts.loc[dtPmts[r] > 1, r] = np.nan
+    if rate_cols:
+        log.info("Normalized rate scaling on %d field(s)", len(rate_cols))
+
+    # --- Servicing fee small-value floor ---
+    if 'servicingFeePercentage' in dtPmts.columns:
+        small = dtPmts['servicingFeePercentage'].abs() < const.minSens()
+        dtPmts.loc[small, 'servicingFeePercentage'] = .01
 
     return dtPmts
 
-def append_calc_fields(dtPmts):
 
-    # Fix missing beginning balances
+# ---------------------------------------------------------------------------
+# Step 2: enrich
+# ---------------------------------------------------------------------------
 
-    begIndx = np.where(dtPmts['reportingPeriodBeginningLoanBalanceAmount'].isnull())
-    dtPmts['reportingPeriodBeginningLoanBalanceAmount'].iloc[begIndx] = dtPmts[['reportingPeriodActualEndBalanceAmount','otherPrincipalAdjustmentAmount',
-                                                                                'chargedoffPrincipalAmount','actualPrincipalCollectedAmount']].iloc[begIndx].sum(axis=1)
+def append_calc_fields(dtPmts: pd.DataFrame) -> pd.DataFrame:
+    """Add derived fields: balances tie-out, age, LTV, monthsDelinquent, prime tier, etc."""
+    dtPmts = dtPmts.copy()
+    sens = const.minSens()
 
-    # Fix charge-offs so payments and balances tie out
+    # --- Backfill missing beginning balances ---
+    beg_col = 'reportingPeriodBeginningLoanBalanceAmount'
+    end_col = 'reportingPeriodActualEndBalanceAmount'
+    if beg_col in dtPmts.columns:
+        beg_nan = dtPmts[beg_col].isna()
+        if beg_nan.any():
+            recover = ['reportingPeriodActualEndBalanceAmount', 'otherPrincipalAdjustmentAmount',
+                       'chargedoffPrincipalAmount', 'actualPrincipalCollectedAmount']
+            dtPmts.loc[beg_nan, beg_col] = (
+                dtPmts.loc[beg_nan, _present(recover, dtPmts)].sum(axis=1)
+            )
 
-    adjIndx = np.logical_or.reduce([np.abs(dtPmts['repossessedProceedsAmount']) > const.minSens(),
-                                     np.abs(dtPmts['chargedoffPrincipalAmount']) > const.minSens(),
-                                     np.abs(dtPmts['recoveredAmount']) > const.minSens()])
+    # --- Charge-off / repo / recovery adjustments to make balances tick ---
+    if all(c in dtPmts.columns for c in
+           ('chargedoffPrincipalAmount', 'repossessedProceedsAmount', 'recoveredAmount', beg_col)):
+        co = dtPmts['chargedoffPrincipalAmount']
+        repo = dtPmts['repossessedProceedsAmount']
+        recov = dtPmts['recoveredAmount']
+        beg = dtPmts[beg_col]
+        adj_mask = (repo.abs() > sens) | (co.abs() > sens) | (recov.abs() > sens)
 
-    # If coAmt = openBal, and recovAmt = 0 and repoAmt > 0,
-    # then recovAmt += repoAmt
-    coIndx = np.where(np.logical_and.reduce([np.abs(dtPmts['chargedoffPrincipalAmount'] - dtPmts['reportingPeriodBeginningLoanBalanceAmount']) < const.minSens(),
-                                             np.abs(dtPmts['recoveredAmount']) < const.minSens(),
-                                             np.abs(dtPmts['repossessedProceedsAmount']) > const.minSens(),
-                                             adjIndx]))
-    dtPmts['recoveredAmount'].iloc[coIndx] += dtPmts['repossessedProceedsAmount'].iloc[coIndx]
+        # If coAmt = openBal, recovAmt = 0, repoAmt > 0: recovAmt += repoAmt
+        c1 = (
+            ((co - beg).abs() < sens)
+            & (recov.abs() < sens)
+            & (repo.abs() > sens)
+            & adj_mask
+        )
+        dtPmts.loc[c1, 'recoveredAmount'] = (
+            dtPmts.loc[c1, 'recoveredAmount'] + dtPmts.loc[c1, 'repossessedProceedsAmount']
+        )
 
-    # If repoAmt + coAmt + recovAmt = openBal,
-    # then coAmt += repoAmt + recovAmt
-    # then recovAmt += repoAmt
-    # then endBal = 0
-    coIndx = np.where(np.logical_and(np.abs(dtPmts[['repossessedProceedsAmount','chargedoffPrincipalAmount','recoveredAmount']].sum(axis=1)
-                                            - dtPmts['reportingPeriodBeginningLoanBalanceAmount']) < const.minSens(),adjIndx))
-    dtPmts['chargedoffPrincipalAmount'].iloc[coIndx] += dtPmts[['repossessedProceedsAmount','recoveredAmount']].iloc[coIndx].sum(axis=1)
-    dtPmts['recoveredAmount'].iloc[coIndx] += dtPmts['repossessedProceedsAmount'].iloc[coIndx]
-    dtPmts['reportingPeriodActualEndBalanceAmount'].iloc[coIndx] = 0
+        # If repoAmt + coAmt + recovAmt = openBal: roll it all into coAmt and zero out endBal
+        c2 = (
+            ((repo + co + recov - beg).abs() < sens)
+            & adj_mask
+        )
+        dtPmts.loc[c2, 'chargedoffPrincipalAmount'] = (
+            dtPmts.loc[c2, 'chargedoffPrincipalAmount']
+            + dtPmts.loc[c2, 'repossessedProceedsAmount']
+            + dtPmts.loc[c2, 'recoveredAmount']
+        )
+        dtPmts.loc[c2, 'recoveredAmount'] = (
+            dtPmts.loc[c2, 'recoveredAmount'] + dtPmts.loc[c2, 'repossessedProceedsAmount']
+        )
+        if end_col in dtPmts.columns:
+            dtPmts.loc[c2, end_col] = 0
 
-    # Ensure payments and balances tick and tie
-    prinOffset = (dtPmts['reportingPeriodBeginningLoanBalanceAmount'] - dtPmts['reportingPeriodActualEndBalanceAmount']) - \
-                 (dtPmts['actualPrincipalCollectedAmount'] + dtPmts['chargedoffPrincipalAmount'] + dtPmts['otherPrincipalAdjustmentAmount'])
+    # --- Make principal balances tick exactly via otherPrincipalAdjustmentAmount ---
+    needed = [beg_col, end_col, 'actualPrincipalCollectedAmount',
+              'chargedoffPrincipalAmount', 'otherPrincipalAdjustmentAmount']
+    if all(c in dtPmts.columns for c in needed):
+        prin_offset = (
+            (dtPmts[beg_col] - dtPmts[end_col])
+            - (dtPmts['actualPrincipalCollectedAmount']
+               + dtPmts['chargedoffPrincipalAmount']
+               + dtPmts['otherPrincipalAdjustmentAmount'])
+        )
+        dtPmts['otherPrincipalAdjustmentAmount'] = (
+            dtPmts['otherPrincipalAdjustmentAmount'] + prin_offset
+        )
+        log.info("Reconciled principal walk via otherPrincipalAdjustmentAmount")
 
-    dtPmts['otherPrincipalAdjustmentAmount'] += prinOffset
-    print('Fixed principalAdjustmentAmount ...')
+    # --- summaryDate (latest reporting month per securitization) & monthsFromCutoffDate ---
+    if 'securitizationKey' in dtPmts.columns:
+        if 'reportingPeriodEndingDate' in dtPmts.columns:
+            sec_max_end = dtPmts.groupby('securitizationKey')[
+                'reportingPeriodEndingDate'
+            ].transform('max')
+            dtPmts['summaryDate'] = (
+                dtPmts['reportingPeriodEndingDate'].eq(sec_max_end).astype(float)
+            )
 
-    # Insert latest row indicator and add months & age from cutoff date, balance at cutoff, and shelf
-    monthsFromCutoff = np.zeros(shape=(dtPmts.shape[0], 1))
-    summaryDate = np.zeros(shape=(dtPmts.shape[0], 1))
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
+        if 'reportingPeriodBeginningDate' in dtPmts.columns:
+            beg_dt = pd.to_datetime(dtPmts['reportingPeriodBeginningDate'], errors='coerce')
+            sec_min_beg = beg_dt.groupby(dtPmts['securitizationKey']).transform('min')
+            mfc = (12 * beg_dt.dt.year + beg_dt.dt.month) - (12 * sec_min_beg.dt.year + sec_min_beg.dt.month)
+            dtPmts['monthsFromCutoffDate'] = mfc.astype(float)
 
-    for sec in secKeys:
-        maxDate = np.max(dtPmts['reportingPeriodEndingDate'].iloc[np.where(dtPmts['securitizationKey'] == sec)])
-        maxIndx = np.where(np.logical_and(dtPmts['securitizationKey'] == sec, dtPmts['reportingPeriodEndingDate'] == maxDate))
-        summaryDate[maxIndx, 0] = 1
+    # --- age (months between beginning date and origination date) ---
+    if all(c in dtPmts.columns for c in ('reportingPeriodBeginningDate', 'originationDate')):
+        beg = pd.to_datetime(dtPmts['reportingPeriodBeginningDate'], errors='coerce')
+        orig = pd.to_datetime(dtPmts['originationDate'], errors='coerce')
+        dtPmts['age'] = (12 * beg.dt.year + beg.dt.month) - (12 * orig.dt.year + orig.dt.month)
 
-        secIndx = np.where(dtPmts['securitizationKey'] == sec)
-        cutoffDate = dtPmts['reportingPeriodBeginningDate'].iloc[secIndx].min()
-        monthsFromCutoff[secIndx, 0] = (12 * dtPmts['reportingPeriodBeginningDate'].iloc[secIndx].dt.year +
-                                        dtPmts['reportingPeriodBeginningDate'].iloc[secIndx].dt.month).values - \
-                                       12 * cutoffDate.year - cutoffDate.month
+    if 'monthsFromCutoffDate' in dtPmts.columns and 'age' in dtPmts.columns:
+        dtPmts['ageFromCutoffDate'] = dtPmts['age'] - dtPmts['monthsFromCutoffDate']
 
-    dtPmts['summaryDate'] = summaryDate
-    print('Inserted last date of data per securitization ...')
+    # --- beginningBalanceAtCutoffDate: each asset's beg balance at monthsFromCutoffDate==0 ---
+    if all(c in dtPmts.columns for c in ('monthsFromCutoffDate', 'assetNumber', 'securitizationKey', beg_col)):
+        at_cutoff = dtPmts.loc[
+            dtPmts['monthsFromCutoffDate'] == 0,
+            ['assetNumber', 'securitizationKey', beg_col]
+        ].rename(columns={beg_col: 'beginningBalanceAtCutoffDate'})
+        dtPmts = dtPmts.merge(at_cutoff, how='left', on=['assetNumber', 'securitizationKey'])
 
-    # Add loan age
-    dtPmts['age'] = 12 * dtPmts['reportingPeriodBeginningDate'].dt.year + dtPmts['reportingPeriodBeginningDate'].dt.month - \
-                    12 * dtPmts['originationDate'].dt.year - dtPmts['originationDate'].dt.month
-    print('Added field: age ...')
+    # --- Split credit score into consumer vs commercial ---
+    if 'obligorCreditScore' in dtPmts.columns:
+        score = dtPmts['obligorCreditScore'].astype(float)
+        low, high = const.validCreditScoreRange()
+        type_col = dtPmts.get('obligorCreditScoreType', pd.Series('', index=dtPmts.index)).astype(str)
+        is_comm = type_col.str.contains('commercial', case=False, na=False)
+        is_other = (
+            (score < low) | (score > high)
+            | type_col.str.contains('Unknown/Invalid', case=False, na=False)
+            | type_col.str.contains('None', case=False, na=False)
+        )
+        consumer = score.where(~is_comm)
+        commercial = score.where(is_comm)
+        consumer = consumer.where(~is_other)
+        commercial = commercial.where(~is_other)
+        dtPmts['consumerCreditScore'] = consumer
+        dtPmts['commercialCreditScore'] = commercial
 
-    # Add beginningBalance, age, months from CutoffDate
-    dtPmts['monthsFromCutoffDate'] = monthsFromCutoff
-    dtPmts['ageFromCutoffDate'] = dtPmts['age'] - dtPmts['monthsFromCutoffDate']
-    dtMatch = dtPmts[['assetNumber','securitizationKey','reportingPeriodBeginningLoanBalanceAmount']].iloc[np.where(dtPmts['monthsFromCutoffDate'] == 0)]
-    dtPmts = pd.merge(dtPmts,dtMatch,how='left',left_on=['assetNumber','securitizationKey'],right_on=['assetNumber','securitizationKey'],copy=False,suffixes=['','_y'])
-    dtPmts = dtPmts.rename(columns = {'reportingPeriodBeginningLoanBalanceAmount_y':'beginningBalanceAtCutoffDate'})
-    print('Added fields: beginningBalanceAtCutoffDate, ageFromCutoffDate, monthsFromCutoffDate ...')
+    # --- Loan-to-value (cap at 2x; flag inf as NaN) ---
+    if all(c in dtPmts.columns for c in ('originalLoanAmount', 'vehicleValueAmount')):
+        ltv = dtPmts['originalLoanAmount'] / dtPmts['vehicleValueAmount'].replace(0, np.nan)
+        ltv = ltv.replace([np.inf, -np.inf], np.nan)
+        ltv = ltv.where(ltv <= 2)
+        dtPmts['loanToValueRatio'] = ltv
 
-    # Determine if score is consumer, commercial, or other
-    consumerCreditScore = np.expand_dims(dtPmts['obligorCreditScore'].values,axis=1)
-    commercialCreditScore = np.ones(shape=(dtPmts.shape[0],1)) * np.nan
+    # --- Vintage ---
+    if 'originationDate' in dtPmts.columns:
+        dtPmts['vintage'] = pd.to_datetime(dtPmts['originationDate'], errors='coerce').dt.year
 
-    commIndx = np.where(dtPmts['obligorCreditScoreType'].str.contains('commercial', case=False))
-    commercialCreditScore[commIndx,0] = dtPmts['obligorCreditScore'].iloc[commIndx].values
-    otherIndx = np.where(np.logical_or.reduce([dtPmts['obligorCreditScore'] < 300, dtPmts['obligorCreditScore'] > 850,
-                                               dtPmts['obligorCreditScoreType'].str.contains('Unknown/Invalid', case=False),
-                                               dtPmts['obligorCreditScoreType'].str.contains('None', case=False)]))
+    # --- monthsDelinquent: 0..4 normal, 5 = charge-off, 6 = paid in full this period ---
+    if 'currentDelinquencyStatus' in dtPmts.columns:
+        md = np.ceil(dtPmts['currentDelinquencyStatus'].astype(float) / 30).clip(upper=4)
+        if 'chargedoffPrincipalAmount' in dtPmts.columns:
+            md = md.where(~(dtPmts['chargedoffPrincipalAmount'] > 0), 5)
+        prepay_inputs = ['otherPrincipalAdjustmentAmount', 'actualPrincipalCollectedAmount',
+                         beg_col, end_col]
+        if all(c in dtPmts.columns for c in prepay_inputs):
+            prepay = (
+                (dtPmts['otherPrincipalAdjustmentAmount'] + dtPmts['actualPrincipalCollectedAmount']
+                 >= dtPmts[beg_col])
+                & (dtPmts[end_col] <= .05)
+            )
+            md = md.where(~prepay, 6)
+        dtPmts['monthsDelinquent'] = md
 
-    consumerCreditScore[otherIndx,0] = np.nan
-    commercialCreditScore[otherIndx, 0] = np.nan
-    consumerCreditScore[commIndx, 0] = np.nan
+    # --- dueAmount + principalPrepaid: join previous month's "next-period due" ---
+    dueAmount_inputs = ['assetNumber', 'securitizationKey',
+                        'reportingPeriodEndingDate', 'reportingPeriodBeginningDate',
+                        'nextReportingPeriodPaymentAmountDue']
+    if all(c in dtPmts.columns for c in dueAmount_inputs):
+        nxt = dtPmts[['assetNumber', 'securitizationKey',
+                       'reportingPeriodEndingDate', 'nextReportingPeriodPaymentAmountDue']].copy()
+        nxt['_join_key'] = (
+            pd.to_datetime(nxt['reportingPeriodEndingDate'], errors='coerce')
+              + pd.DateOffset(days=1)
+        ).dt.strftime('%m-%d-%Y')
+        nxt = nxt.drop(columns=['reportingPeriodEndingDate'])
+        nxt = nxt.rename(columns={'nextReportingPeriodPaymentAmountDue': '_prev_due'})
 
-    dtPmts['consumerCreditScore'] = consumerCreditScore
-    dtPmts['commercialCreditScore'] = commercialCreditScore
-    print('Seperated consumer and commercial credit scores ...')
+        dtPmts['_join_key'] = pd.to_datetime(
+            dtPmts['reportingPeriodBeginningDate'], errors='coerce'
+        ).dt.strftime('%m-%d-%Y')
+        dtPmts = dtPmts.merge(
+            nxt, how='left', on=['assetNumber', 'securitizationKey', '_join_key']
+        )
+        dtPmts = dtPmts.drop(columns=['_join_key'])
+        dtPmts['dueAmount'] = pd.to_numeric(dtPmts.pop('_prev_due'), errors='coerce')
 
-    # Add LTV, where V = 0, make it NaN
-    dtPmts['loanToValueRatio'] = np.divide(dtPmts['originalLoanAmount'],dtPmts['vehicleValueAmount'])
-    dtPmts['loanToValueRatio'].iloc[np.where(dtPmts['loanToValueRatio'] == np.inf)] = np.nan
-    dtPmts['loanToValueRatio'].iloc[np.where(dtPmts['loanToValueRatio'] > 2)] = np.nan
-    print('Added field: LTV ...')
+        # Fallback: when no prior row exists, estimate from scheduled fields + delinquency
+        fallback_inputs = ['scheduledInterestAmount', 'scheduledPrincipalAmount',
+                           'currentDelinquencyStatus']
+        if all(c in dtPmts.columns for c in fallback_inputs):
+            nan = dtPmts['dueAmount'].isna()
+            dtPmts.loc[nan, 'dueAmount'] = (
+                dtPmts.loc[nan, ['scheduledInterestAmount', 'scheduledPrincipalAmount']].sum(axis=1)
+                * (np.floor(dtPmts.loc[nan, 'currentDelinquencyStatus'].astype(float) / 30) + 1)
+            )
 
-    # Add vintage
-    dtPmts['vintage'] = dtPmts['originationDate'].dt.year
-    print('Added field: vintage ...')
+        # principalPrepaid = max(P+I collected - dueAmount, 0), zeroed for any charge-off row.
+        # Use sum(skipna=True) so a missing actualInterestCollectedAmount is treated
+        # as 0 rather than poisoning the row.
+        if all(c in dtPmts.columns for c in
+               ('actualPrincipalCollectedAmount', 'actualInterestCollectedAmount',
+                'chargedoffPrincipalAmount')):
+            collected = dtPmts[
+                ['actualPrincipalCollectedAmount', 'actualInterestCollectedAmount']
+            ].sum(axis=1)
+            pp = (collected - dtPmts['dueAmount']).clip(lower=0)
+            pp = pp.where(~(dtPmts['chargedoffPrincipalAmount'].abs() > sens), 0)
+            dtPmts['principalPrepaid'] = pp
 
-    # Add monthsDelinquent, chargeOff and prepay indicator
-    dtPmts['monthsDelinquent'] = np.ceil(dtPmts['currentDelinquencyStatus'] / 30)
-    dtPmts['monthsDelinquent'].iloc[np.where(dtPmts['monthsDelinquent'] > 4)] = 4
-    dtPmts['monthsDelinquent'].iloc[np.where(dtPmts['chargedoffPrincipalAmount'] > 0)] = 5
-    dtPmts['monthsDelinquent'].iloc[np.where(np.logical_and(dtPmts['otherPrincipalAdjustmentAmount'] + dtPmts['actualPrincipalCollectedAmount'] >= dtPmts['reportingPeriodBeginningLoanBalanceAmount'],
-                                                            dtPmts['reportingPeriodActualEndBalanceAmount'] <= .05))] = 6
-    print('Added field: monthsDelinquent ...')
+    # --- Prime tier from consumerCreditScore ---
+    if 'consumerCreditScore' in dtPmts.columns:
+        score = dtPmts['consumerCreditScore']
+        prime = pd.Series(0.0, index=dtPmts.index)
+        for lo, hi, code in const.primeTiers():
+            mask = score.notna() & (score > lo) & (score <= hi)
+            prime = prime.where(~mask, code)
+        dtPmts['primeIndicator'] = prime
 
-    # Add dueAmount and principalPrepaid
-    dtNextPmtDue = dtPmts[['assetNumber','securitizationKey','nextReportingPeriodPaymentAmountDue']].copy(deep=True)
-    dtNextPmtDue['nextReportingPeriod'] = (pd.DatetimeIndex(dtPmts['reportingPeriodEndingDate']) + pd.DateOffset(1)).strftime('%m-%d-%Y')
-    dtPmts['nextReportingPeriod'] = pd.DatetimeIndex(dtPmts['reportingPeriodBeginningDate']).strftime('%m-%d-%Y')
-    dtPmts = pd.merge(dtPmts,dtNextPmtDue,how='left',left_on=['assetNumber','securitizationKey','nextReportingPeriod'],
-                      right_on=['assetNumber','securitizationKey','nextReportingPeriod'],copy=False,suffixes=['','_y'])
+    # --- Net losses ---
+    if all(c in dtPmts.columns for c in ('chargedoffPrincipalAmount', 'recoveredAmount')):
+        dtPmts['netLosses'] = (
+            (dtPmts['chargedoffPrincipalAmount'] - dtPmts['recoveredAmount']).clip(lower=0).fillna(0)
+        )
 
-    dtPmts = dtPmts.drop(['nextReportingPeriod'],axis=1)
-    dtPmts = dtPmts.rename(columns = {'nextReportingPeriodPaymentAmountDue_y':'dueAmount'})
-    dtPmts['dueAmount'] = pd.to_numeric(dtPmts['dueAmount'], errors='coerce')
-    nanIndx = np.where(dtPmts['dueAmount'].isnull())
-    dtPmts['dueAmount'].iloc[nanIndx] = dtPmts[['scheduledInterestAmount','scheduledPrincipalAmount']].iloc[nanIndx].sum(axis=1) * \
-                                        (np.floor(dtPmts['currentDelinquencyStatus'].iloc[nanIndx]/30) + 1)
-
-    dtPmts['principalPrepaid'] = np.maximum(dtPmts[['actualPrincipalCollectedAmount','actualInterestCollectedAmount']].sum(axis=1) - dtPmts['dueAmount'],0)
-    pmtIndx = np.where(np.abs(dtPmts['chargedoffPrincipalAmount']) > const.minSens())
-    # No prepayment when there is even a partial charge off
-    dtPmts['principalPrepaid'].iloc[pmtIndx] = 0
-    print('Added fields: dueAmount and principalPrepaid ...')
-
-    # Add prime signifiers
-    prime = np.zeros(shape=(dtPmts.shape[0],1))
-    # Superprime is > 740
-    prime[np.where(np.logical_and(dtPmts['consumerCreditScore']>740,
-                                  np.isnan(dtPmts['consumerCreditScore'])==False)),0] = 4
-    # Prime is 680 - 740
-    prime[np.where(np.logical_and.reduce([dtPmts['consumerCreditScore']>680,
-                                          dtPmts['consumerCreditScore']<=740,
-                                          np.isnan(dtPmts['consumerCreditScore'])==False])),0] = 3
-    # Near prime is 640 - 680
-    prime[np.where(np.logical_and.reduce([dtPmts['consumerCreditScore']>640,
-                                          dtPmts['consumerCreditScore']<=680,
-                                          np.isnan(dtPmts['consumerCreditScore'])==False])),0] = 2
-    # Sub prime is
-    prime[np.where(np.logical_and(dtPmts['consumerCreditScore']<= 640,
-                                  np.isnan(dtPmts['consumerCreditScore'])==False)),0] = 1
-    # Other is 0
-    dtPmts['primeIndicator'] = prime
-    print('Added field: primeIndicator ...')
-
-    # Add net losses
-    dtPmts['netLosses'] = np.maximum(dtPmts['chargedoffPrincipalAmount'] - dtPmts['recoveredAmount'],0).fillna(0)
-    print('Added field: netLosses ...')
-
-    #Add region
-    dtRegion = read_dict('states.csv')
-    dtPmts = pd.merge(dtPmts, dtRegion, how='left', left_on='obligorGeographicLocation', right_on='state', copy=False)
-    dtPmts = dtPmts.drop(['state'], axis=1)
-    print('Added field: region ...')
+    # --- Region lookup ---
+    if 'obligorGeographicLocation' in dtPmts.columns:
+        try:
+            dtRegion = read_dict('states.csv')
+        except FileNotFoundError:
+            log.warning("Inputs/states.csv missing; skipping region lookup.")
+        else:
+            dtPmts = dtPmts.merge(
+                dtRegion, how='left', left_on='obligorGeographicLocation', right_on='state'
+            )
+            if 'state' in dtPmts.columns:
+                dtPmts = dtPmts.drop(columns=['state'])
 
     return dtPmts
 
-def data_vetting(dtPmts):
-#Desc: Finds initial set of errors with raw (minimally processed) data.
 
-    secKeys = np.sort(dtPmts['securitizationKey'].unique())
-    numFields = const.decimalFields() + const.integerFields() + const.rateFields() + const.dateFields()
-    strFields = const.stringFields()
-    dtErrors = pd.DataFrame(data=np.zeros(shape=(len(const.rawCols()),len(secKeys))),index=const.rawCols(),columns=secKeys)
-    dtCF = pd.DataFrame()
-    dtDescNum = pd.DataFrame()
-    dtDescStr = pd.DataFrame()
+# ---------------------------------------------------------------------------
+# Step 3: vetting
+# ---------------------------------------------------------------------------
 
-    for s in secKeys:
-        print('Identifying errors in securitization: %s ... ' %s)
-        dtP = dtPmts.iloc[np.where(dtPmts['securitizationKey'] == s)]
-
-        #dtErrors tracks errors in the raw data at the deal level
-        dtErrors[s].ix['Count'] = len(dtP['assetNumber'].unique())
-        dtErrors[s].ix['OpenBal'] = dtP['reportingPeriodBeginningLoanBalanceAmount'].iloc[
-            np.where(dtP['reportingPeriodBeginningDate'] == dtP['reportingPeriodBeginningDate'].unique().min())].sum()
-        dtErrors[s].ix['StartMonth'] = dtP['reportingPeriodBeginningDate'].min()
-        dtErrors[s].ix['EndMonth'] = dtP['reportingPeriodBeginningDate'].max()
-        dtErrors[s].ix['MissingMonths'] = len(np.where(np.in1d(np.array(pd.date_range(start=dtP['reportingPeriodEndingDate'].min(),end=dtPmts['reportingPeriodEndingDate'].max(),freq='M')),
-                                                    dtP['reportingPeriodEndingDate'].unique()) == False)[0])
-
-        dtErrors[s].ix['Walk'] = len(np.where(np.logical_and.reduce([dtP['reportingPeriodBeginningLoanBalanceAmount'].iloc[1:] != dtP['reportingPeriodActualEndBalanceAmount'].iloc[:-1],
-                                                  dtP['assetNumber'].iloc[1:] == dtP['assetNumber'].iloc[:-1],
-                                                  dtP['securitizationKey'].iloc[1:] == dtP['securitizationKey'].iloc[:-1]]))[0])
-        dtErrors[s].ix['IncrBal'] = len(np.where(np.logical_and.reduce([dtP['reportingPeriodBeginningLoanBalanceAmount'].iloc[:-1] < dtP['reportingPeriodBeginningLoanBalanceAmount'].iloc[1:],
-                                                  dtP['assetNumber'].iloc[1:] == dtP['assetNumber'].iloc[:-1],
-                                                  dtP['securitizationKey'].iloc[1:] == dtP['securitizationKey'].iloc[:-1]]))[0])
-        dtErrors[s].ix['Pmts'] = len(np.where(np.abs((dtP['reportingPeriodBeginningLoanBalanceAmount'] - dtP['reportingPeriodActualEndBalanceAmount']) - \
-                         (dtP['actualPrincipalCollectedAmount'] + dtP['chargedoffPrincipalAmount'] + dtP['otherPrincipalAdjustmentAmount'])) > const.minSens())[0])
-
-        # To calculate missing and extra records we compare MoM assetNumbers
-        secMonths = np.sort(dtP['reportingPeriodBeginningDate'].unique())
-        if (len(secMonths) > 1):
-            for i in range(0,len(secMonths)-1):
-                lastIndx = np.where(np.logical_and(dtP['reportingPeriodBeginningDate'] == secMonths[i],np.abs(dtP['reportingPeriodActualEndBalanceAmount']) > const.minSens()))
-                nextlastIndx = np.where(dtP['reportingPeriodBeginningDate'] == secMonths[i+1])
-
-                lastLoans = dtP['assetNumber'].iloc[lastIndx].unique()
-                nextlastLoans = dtP['assetNumber'].iloc[nextlastIndx].unique()
-
-                dtErrors[s].ix['Missing'] += len(np.where(np.in1d(lastLoans,nextlastLoans) == False)[0])
-                dtErrors[s].ix['Extra'] += len(np.where(np.in1d(nextlastLoans, lastLoans) == False)[0])
-
-        for c in np.where(dtP['chargedoffPrincipalAmount'] > const.minSens())[0]:
-            dtErrors[s].ix['COExtra'] += len(np.where(np.logical_and(dtP['assetNumber'] == dtP['assetNumber'].iloc[c],
-                                    dtP['reportingPeriodBeginningDate'] > dtP['reportingPeriodBeginningDate'].iloc[c]))[0])
-
-        dtErrors[s].ix['Dupes'] = len(dtP.set_index(['assetNumber', 'reportingPeriodBeginningDate', 'securitizationKey']).index.get_duplicates())
-        dtErrors[s].ix['NegOpenBal'] = len(np.where(dtP['reportingPeriodBeginningLoanBalanceAmount'] < 0)[0])
-        dtErrors[s].ix['NegCloseBal'] = len(np.where(dtP['reportingPeriodActualEndBalanceAmount'] < 0)[0])
-        dtErrors[s].ix['RateNeg'] = len(np.where(dtP[const.rateFields()] < 0)[0])
-        dtErrors[s].ix['RatePos'] = len(np.where(dtP[const.rateFields()] > 1)[0])
-        dtErrors[s].ix['Integer'] = len(np.where(dtP[const.integerFields()].mod(1,axis=0,fill_value=0) != 0)[0])
-        dtErrors[s].ix['NegCO'] = len(np.where(dtP['chargedoffPrincipalAmount'] < 0)[0])
-        dtErrors[s].ix['PartialCO'] = len(np.where(np.logical_and(dtP['chargedoffPrincipalAmount'] < dtP['reportingPeriodBeginningLoanBalanceAmount'],
-                                                                  np.abs(dtP['chargedoffPrincipalAmount']) > const.minSens()))[0])
-        dtErrors[s].ix['GreaterCO'] = len(np.where(np.logical_and(dtP['chargedoffPrincipalAmount'] > dtP['reportingPeriodBeginningLoanBalanceAmount'],
-                                                                  np.abs(dtP['chargedoffPrincipalAmount']) > const.minSens()))[0])
-        dtErrors[s].ix['NegRepo'] = len(np.where(dtP['repossessedProceedsAmount'] < 0)[0])
-        dtErrors[s].ix['NegRecov'] = len(np.where(dtP['recoveredAmount'] < 0)[0])
-
-        dtCF = pd.concat([dtCF, cashflow_vetting(dtP).sum(axis=0).transpose()], axis=1)
-
-    dtCF.columns = secKeys
-    dtErrors = pd.concat([dtErrors,dtCF],axis=0)
-
-# dtDescNum and dtDescStr tracks errors for numerical and string fields at the field level
-    dtTemp = pd.concat([dtP[numFields].describe(include=[np.number]).transpose(),dtP[numFields].isnull().sum(axis=0),
-                        (dtP[numFields] == 0).sum(axis=0),(dtP[const.rateFields()] > 1).sum(axis=0),
-                        (dtP[const.rateFields()] < 0).sum(axis=0),
-                        (dtP[const.integerFields()].mod(1,axis=0,fill_value=0) != 0).sum(axis=0)],axis=1)
-    dtTemp.columns = s + ' ' + np.append(dtP[numFields].describe(include=[np.number]).index.values,
-                                         (['nans','zeros','rate>1','rate<0','non-int']))
-    dtDescNum = pd.concat([dtDescNum,dtTemp],axis=1)
-
-    dtTemp = pd.concat([dtPmts[strFields].describe(exclude=[np.number]).transpose(),
-                        dtP[strFields].isnull().sum(axis=0)], axis=1)
-    dtTemp.columns = s + ' ' + np.append(dtPmts[strFields].describe(exclude=[np.number]).index,'nans')
-    dtDescStr = pd.concat([dtDescStr,dtTemp],axis=1)
-    print('Processed raw errors for securitization: %s ... '%s)
-
-    return dtErrors,dtDescNum,dtDescStr
-
-def cashflow_vetting(dtP):
-
-    return dtP.groupby(['reportingPeriodBeginningDate'])['reportingPeriodBeginningLoanBalanceAmount','actualPrincipalCollectedAmount',
-                               'chargedoffPrincipalAmount','otherPrincipalAdjustmentAmount',
-                               'reportingPeriodActualEndBalanceAmount','actualInterestCollectedAmount',#'principalPrepaid',
-                               'recoveredAmount','repossessedProceedsAmount'].sum()
-
-def main(argv = sys.argv):
-
-dtClean = clean_ald_files(dtRaw)
-dtPmts = append_calc_fields(dtClean)
-pmtIndx = np.where(np.abs(dtPmts['chargedoffPrincipalAmount']) > .01)
-lIndx = dtPmts['assetNumber'].iloc[pmtIndx].unique()
-pmtIndx = np.where(np.in1d(dtPmts['assetNumber'],lIndx))
-rawIndx = np.where(np.in1d(dtRaw['assetNumber'],lIndx))
-
-dtRaw.iloc[rawIndx].to_csv('raw.csv')
-dtPmts.iloc[pmtIndx].to_csv('clean.csv')
+def cashflow_vetting(dtP: pd.DataFrame) -> pd.DataFrame:
+    """Per-month cashflow rollup for a single securitization slice."""
+    cols = ['reportingPeriodBeginningLoanBalanceAmount', 'actualPrincipalCollectedAmount',
+            'chargedoffPrincipalAmount', 'otherPrincipalAdjustmentAmount',
+            'reportingPeriodActualEndBalanceAmount', 'actualInterestCollectedAmount',
+            'recoveredAmount', 'repossessedProceedsAmount']
+    present = _present(cols, dtP)
+    if not present or 'reportingPeriodBeginningDate' not in dtP.columns:
+        return pd.DataFrame()
+    return dtP.groupby('reportingPeriodBeginningDate')[present].sum()
 
 
-kk = pd.pivot_table(data=dtPmts,values='securitizationKey',index='obligorIncomeVerificationLevelCode',columns='obligorEmploymentVerificationCode',aggfunc=np.count_nonzero)
+def _vet_one(dtP: pd.DataFrame) -> dict:
+    """Compute per-securitization error counts. dtP must be a single-sec slice, sorted."""
+    sens = const.minSens()
+    out = {c: 0 for c in const.rawCols()}
+
+    out['Count'] = int(dtP['assetNumber'].nunique()) if 'assetNumber' in dtP.columns else 0
+
+    if all(c in dtP.columns for c in
+           ('reportingPeriodBeginningLoanBalanceAmount', 'reportingPeriodBeginningDate')):
+        beg_dates = dtP['reportingPeriodBeginningDate']
+        min_beg = beg_dates.min()
+        out['OpenBal'] = float(
+            dtP.loc[beg_dates == min_beg, 'reportingPeriodBeginningLoanBalanceAmount'].sum()
+        )
+        out['StartMonth'] = min_beg
+        out['EndMonth'] = beg_dates.max()
+
+    if 'reportingPeriodEndingDate' in dtP.columns:
+        end_dates = dtP['reportingPeriodEndingDate']
+        expected = pd.date_range(start=end_dates.min(), end=end_dates.max(), freq='M')
+        present_months = set(end_dates.dropna().unique())
+        out['MissingMonths'] = int(sum(1 for d in expected if d not in present_months))
+
+    # Balance walks and increases: require sorted slice (caller sorted by asset+date).
+    if all(c in dtP.columns for c in
+           ('reportingPeriodBeginningLoanBalanceAmount', 'reportingPeriodActualEndBalanceAmount',
+            'assetNumber', 'securitizationKey')):
+        beg = dtP['reportingPeriodBeginningLoanBalanceAmount'].to_numpy()
+        end = dtP['reportingPeriodActualEndBalanceAmount'].to_numpy()
+        same_asset = dtP['assetNumber'].to_numpy()[1:] == dtP['assetNumber'].to_numpy()[:-1]
+        same_sec = dtP['securitizationKey'].to_numpy()[1:] == dtP['securitizationKey'].to_numpy()[:-1]
+        contiguous = same_asset & same_sec
+        out['Walk'] = int(((beg[1:] != end[:-1]) & contiguous).sum())
+        out['IncrBal'] = int(((beg[:-1] < beg[1:]) & contiguous).sum())
+
+    if all(c in dtP.columns for c in
+           ('reportingPeriodBeginningLoanBalanceAmount', 'reportingPeriodActualEndBalanceAmount',
+            'actualPrincipalCollectedAmount', 'chargedoffPrincipalAmount',
+            'otherPrincipalAdjustmentAmount')):
+        diff = (
+            (dtP['reportingPeriodBeginningLoanBalanceAmount']
+             - dtP['reportingPeriodActualEndBalanceAmount'])
+            - (dtP['actualPrincipalCollectedAmount']
+               + dtP['chargedoffPrincipalAmount']
+               + dtP['otherPrincipalAdjustmentAmount'])
+        )
+        out['Pmts'] = int((diff.abs() > sens).sum())
+
+    # Month-over-month missing/extra assets
+    if all(c in dtP.columns for c in
+           ('reportingPeriodBeginningDate', 'reportingPeriodActualEndBalanceAmount',
+            'assetNumber')):
+        secMonths = np.sort(dtP['reportingPeriodBeginningDate'].dropna().unique())
+        missing = extra = 0
+        for i in range(len(secMonths) - 1):
+            this_month = dtP['reportingPeriodBeginningDate'] == secMonths[i]
+            next_month = dtP['reportingPeriodBeginningDate'] == secMonths[i + 1]
+            this_loans = set(dtP.loc[
+                this_month & (dtP['reportingPeriodActualEndBalanceAmount'].abs() > sens),
+                'assetNumber',
+            ].unique())
+            next_loans = set(dtP.loc[next_month, 'assetNumber'].unique())
+            missing += len(this_loans - next_loans)
+            extra += len(next_loans - this_loans)
+        out['Missing'] = missing
+        out['Extra'] = extra
+
+    # COExtra: count of rows that exist for an asset *after* it was charged off.
+    # Previously O(N^2) — now a groupby + merge.
+    if all(c in dtP.columns for c in
+           ('assetNumber', 'reportingPeriodBeginningDate', 'chargedoffPrincipalAmount')):
+        co_rows = dtP.loc[dtP['chargedoffPrincipalAmount'] > sens,
+                          ['assetNumber', 'reportingPeriodBeginningDate']]
+        if not co_rows.empty:
+            co_first = (
+                co_rows.groupby('assetNumber')['reportingPeriodBeginningDate']
+                       .min()
+                       .rename('_co_date')
+            )
+            joined = (
+                dtP[['assetNumber', 'reportingPeriodBeginningDate']]
+                .merge(co_first, left_on='assetNumber', right_index=True, how='inner')
+            )
+            out['COExtra'] = int(
+                (joined['reportingPeriodBeginningDate'] > joined['_co_date']).sum()
+            )
+
+    # Duplicates on (asset, beg date, sec key)
+    dup_keys = _present(
+        ['assetNumber', 'reportingPeriodBeginningDate', 'securitizationKey'], dtP
+    )
+    if dup_keys:
+        out['Dupes'] = int(dtP.duplicated(subset=dup_keys, keep=False).sum())
+
+    if 'reportingPeriodBeginningLoanBalanceAmount' in dtP.columns:
+        out['NegOpenBal'] = int((dtP['reportingPeriodBeginningLoanBalanceAmount'] < 0).sum())
+    if 'reportingPeriodActualEndBalanceAmount' in dtP.columns:
+        out['NegCloseBal'] = int((dtP['reportingPeriodActualEndBalanceAmount'] < 0).sum())
+
+    rate_cols = _present(const.rateFields(), dtP)
+    if rate_cols:
+        out['RateNeg'] = int((dtP[rate_cols] < 0).sum().sum())
+        out['RatePos'] = int((dtP[rate_cols] > 1).sum().sum())
+
+    int_cols = _present(const.integerFields(), dtP)
+    if int_cols:
+        out['Integer'] = int(
+            (dtP[int_cols].mod(1, axis=0, fill_value=0) != 0).sum().sum()
+        )
+
+    if 'chargedoffPrincipalAmount' in dtP.columns:
+        co = dtP['chargedoffPrincipalAmount']
+        out['NegCO'] = int((co < 0).sum())
+        if 'reportingPeriodBeginningLoanBalanceAmount' in dtP.columns:
+            beg = dtP['reportingPeriodBeginningLoanBalanceAmount']
+            mask_nz = co.abs() > sens
+            out['PartialCO'] = int(((co < beg) & mask_nz).sum())
+            out['GreaterCO'] = int(((co > beg) & mask_nz).sum())
+
+    if 'repossessedProceedsAmount' in dtP.columns:
+        out['NegRepo'] = int((dtP['repossessedProceedsAmount'] < 0).sum())
+    if 'recoveredAmount' in dtP.columns:
+        out['NegRecov'] = int((dtP['recoveredAmount'] < 0).sum())
+
+    return out
 
 
-dtPmts.groupby(['securitizationKey','reportingPeriodBeginningDate'])[['principalPrepaid','otherPrincipalAdjustmentAmount',
-                                                                      'chargedoffPrincipalAmount','recoveredAmount']].sum().to_csv('out.csv')
+def data_vetting(dtPmts: pd.DataFrame):
+    """Per-securitization error/description rollup.
 
-dtErrors,dtDescNum,dtDescStr = data_vetting(dtPmts)
-#dtDescNum.to_csv('descnum.csv')
-#dtDescStr.to_csv('descstr.csv')
-dtErrors.to_csv('Error Log/cleanErrors20170508.csv')
+    Returns ``(dtErrors, dtDescNum, dtDescStr)``. ``dtErrors`` is rows-by-metric,
+    columns-by-securitization. The raw frame is sorted before slicing so the
+    walk-error check actually means something.
+    """
+    if 'securitizationKey' not in dtPmts.columns:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+    sort_cols = _present(['securitizationKey', 'assetNumber', 'reportingPeriodBeginningDate'], dtPmts)
+    dtPmts = dtPmts.sort_values(sort_cols).reset_index(drop=True) if sort_cols else dtPmts
 
-coIndx = np.where(np.abs(dtPmts['chargedoffPrincipalAmount']) > const.minSens())
-coIndx = np.where(np.in1d(dtPmts['assetNumber'],dtPmts['assetNumber'].iloc[coIndx]))
-dtPmts[const.debugFieldsClean()].iloc[coIndx].to_csv('cleanCO.csv')
+    sec_keys = sorted(dtPmts['securitizationKey'].dropna().unique())
+    error_records: dict[str, dict] = {}
+    cf_frames: list[pd.DataFrame] = []
+    desc_num_frames: list[pd.DataFrame] = []
+    desc_str_frames: list[pd.DataFrame] = []
+    num_fields = (const.decimalFields() + const.integerFields()
+                  + const.rateFields() + const.dateFields())
+    str_fields = const.stringFields()
 
-ii = np.where(np.in1d(dtRaw['assetNumber'],dtPmts['assetNumber'].iloc[coIndx]))
-dtRaw[const.debugFieldsRaw()].iloc[ii].to_csv('raw.csv')
+    for s in sec_keys:
+        log.info("Vetting securitization: %s", s)
+        dtP = dtPmts.loc[dtPmts['securitizationKey'] == s].reset_index(drop=True)
+        error_records[s] = _vet_one(dtP)
 
-ii = np.where(dtPmts['assetNumber'] == '368159')
+        cf = cashflow_vetting(dtP).sum(axis=0)
+        cf.name = s
+        cf_frames.append(cf.to_frame())
 
-if __name__ == "__main__":
-    sys.exit(main())
+        present_num = _present(num_fields, dtP)
+        if present_num:
+            num_part = dtP[present_num].describe(include=[np.number]).transpose()
+            extras = pd.concat([
+                dtP[present_num].isna().sum().rename('nans'),
+                (dtP[present_num] == 0).sum().rename('zeros'),
+                (dtP[_present(const.rateFields(), dtP)] > 1).sum().rename('rate>1'),
+                (dtP[_present(const.rateFields(), dtP)] < 0).sum().rename('rate<0'),
+                (dtP[_present(const.integerFields(), dtP)]
+                    .mod(1, axis=0, fill_value=0) != 0).sum().rename('non-int'),
+            ], axis=1)
+            num_part = num_part.join(extras, how='left')
+            num_part.columns = [f"{s} {c}" for c in num_part.columns]
+            desc_num_frames.append(num_part)
+
+        present_str = _present(str_fields, dtP)
+        if present_str:
+            str_part = dtP[present_str].describe(exclude=[np.number]).transpose()
+            str_part['nans'] = dtP[present_str].isna().sum()
+            str_part.columns = [f"{s} {c}" for c in str_part.columns]
+            desc_str_frames.append(str_part)
+
+    # Build dtErrors from records dict to avoid per-cell .ix assignment.
+    dtErrors = pd.DataFrame.from_dict(error_records, orient='columns')
+    dtErrors = dtErrors.reindex(const.rawCols())
+    if cf_frames:
+        dtCF = pd.concat(cf_frames, axis=1)
+        dtCF = dtCF.reindex(columns=sec_keys)
+        dtErrors = pd.concat([dtErrors, dtCF], axis=0)
+
+    dtDescNum = pd.concat(desc_num_frames, axis=1) if desc_num_frames else pd.DataFrame()
+    dtDescStr = pd.concat(desc_str_frames, axis=1) if desc_str_frames else pd.DataFrame()
+    return dtErrors, dtDescNum, dtDescStr

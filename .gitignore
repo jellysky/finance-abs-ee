@@ -90,3 +90,17 @@ credentials.json
 
 # This sync system's own log
 sync.log
+
+# Downloaded ABS-EE XML data (often >100 MB per file; GitHub's hard limit).
+# Re-fetch via `python utility.py download` on each machine.
+/Auto Loans/
+/Auto Leases/
+/CMBS/
+
+# Pickled DataFrames and ad-hoc CSV scratch
+/Pickled/
+/csv/
+
+# Smoke-test scratch CSVs
+/Inputs/test_*.csv
+/Inputs/_*.csv

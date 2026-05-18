@@ -1,0 +1,8 @@
+# Runtime deps for the ABS-EE downloader (utility.py).
+# Tested on Python 3.10.
+pandas>=1.5,<2
+numpy>=1.23,<2
+numpy-financial>=1.0
+requests>=2.28
+urllib3>=1.26
+xmltodict>=0.13
