@@ -50,6 +50,12 @@ def _rows(records: list[dict]) -> pd.DataFrame:
     for col in ("chargedoffPrincipalAmount", "recoveredAmount", "netLosses"):
         if col not in df.columns:
             df[col] = 0.0
+    # Synthesize days-past-due from the bucket when not given (md*30 puts md=k at
+    # the k-th 30-day boundary; charged-off / paid-off rows -> 0 days). Lets the
+    # fixtures drive the real days-based delinquency path in metrics.py.
+    if "currentDelinquencyStatus" not in df.columns:
+        md = df["monthsDelinquent"]
+        df["currentDelinquencyStatus"] = (md.clip(upper=4) * 30).where(~md.isin([5, 6]), 0)
     # Default any unset beginning balance to that row's end balance (per-row, so
     # one row setting it explicitly doesn't leave the rest NaN).
     beg = "reportingPeriodBeginningLoanBalanceAmount"

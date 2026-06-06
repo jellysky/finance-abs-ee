@@ -27,14 +27,18 @@ import pandas as pd
 
 log = logging.getLogger("absee.subprime.metrics")
 
-# monthsDelinquent state codes.
+# monthsDelinquent state codes (used for *state*, not delinquency depth).
 MD_CURRENT = 0
-MD_30 = 1
-MD_60 = 2
 MD_CHARGEOFF = 5
 MD_PIF = 6
-# Delinquent-but-not-resolved states (exclude charge-off / paid-in-full).
-_DELQ_STATES = (MD_30, MD_60, 3, 4)
+_RESOLVED_STATES = (MD_CHARGEOFF, MD_PIF)  # charged-off / paid-in-full → not active
+
+# Delinquency thresholds in DAYS. The parser stores ``currentDelinquencyStatus``
+# in days and buckets ``monthsDelinquent = ceil(days/30)``, so md=1 is 1–29 days
+# — NOT 30+. Thresholding on raw days gives the unambiguous, industry-standard
+# 30+/60+ DPD definitions.
+DPD_30 = 30
+DPD_60 = 60
 
 
 def _month_start(s: pd.Series) -> pd.Series:
@@ -45,23 +49,23 @@ def _month_start(s: pd.Series) -> pd.Series:
 def _roll_current_to_30(df: pd.DataFrame) -> pd.DataFrame:
     """Balance-weighted Current -> 30+ DPD roll, per (trust, month).
 
-    For each loan that is Current (md==0) in month M with end balance B, look up
-    its delinquency state in month M+1. The denominator is B summed over loans
-    that are observable next month; the numerator is B summed over those that
-    are 30+ DPD (and not charged-off / paid-off) next month.
+    For each loan that is Current (md==0, i.e. 0 DPD and still in the pool) in
+    month M with end balance B, look up its delinquency in month M+1. The
+    denominator is B summed over loans observable next month; the numerator is B
+    summed over those that are 30+ days past due next month.
 
     Returns a frame indexed by (securitizationKey, month) with
     ``current_balance`` (denominator) and ``roll_30_balance`` (numerator).
     """
     cols = ["securitizationKey", "assetNumber", "_month", "monthsDelinquent",
-            "reportingPeriodActualEndBalanceAmount"]
+            "_dpd", "reportingPeriodActualEndBalanceAmount"]
     if not all(c in df.columns for c in cols):
         return pd.DataFrame(columns=["current_balance", "roll_30_balance"])
 
     base = df[cols].copy()
-    # Next month's state, aligned by shifting the lookup frame back one month.
-    nxt = base[["securitizationKey", "assetNumber", "_month", "monthsDelinquent"]].rename(
-        columns={"monthsDelinquent": "_md_next"}
+    # Next month's days-past-due, aligned by shifting the lookup frame back one month.
+    nxt = base[["securitizationKey", "assetNumber", "_month", "_dpd"]].rename(
+        columns={"_dpd": "_dpd_next"}
     )
     nxt["_month"] = nxt["_month"] - pd.offsets.MonthBegin(1)
 
@@ -72,7 +76,7 @@ def _roll_current_to_30(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["current_balance", "roll_30_balance"])
 
     bal = cur["reportingPeriodActualEndBalanceAmount"]
-    rolled = cur["_md_next"].isin(_DELQ_STATES)
+    rolled = cur["_dpd_next"] >= DPD_30
     cur = cur.assign(current_balance=bal, roll_30_balance=bal.where(rolled, 0.0))
     return cur.groupby(["securitizationKey", "_month"])[
         ["current_balance", "roll_30_balance"]
@@ -104,6 +108,15 @@ def trust_month_metrics(dtPmts: pd.DataFrame) -> pd.DataFrame:
 
     end_bal = df["reportingPeriodActualEndBalanceAmount"]
     md = df["monthsDelinquent"]
+    # Days past due drives the 30+/60+ thresholds. Prefer the raw day count;
+    # fall back to the monthsDelinquent bucket midpoint only if it is absent.
+    if "currentDelinquencyStatus" in df.columns:
+        df["_dpd"] = pd.to_numeric(df["currentDelinquencyStatus"], errors="coerce").fillna(0)
+    else:
+        log.warning("currentDelinquencyStatus absent; approximating DPD from "
+                    "monthsDelinquent buckets.")
+        df["_dpd"] = (md.clip(upper=4) * 30).where(~md.isin(_RESOLVED_STATES), 0)
+    dpd = df["_dpd"]
     grp = df.groupby(["securitizationKey", "_month"])
 
     out = pd.DataFrame(index=grp.size().index)
@@ -113,12 +126,14 @@ def trust_month_metrics(dtPmts: pd.DataFrame) -> pd.DataFrame:
     else:
         out["pool_beg_balance"] = np.nan
 
-    # Delinquency numerators (balance-weighted, end-of-period balance).
-    df["_delq30_bal"] = end_bal.where(md.isin(_DELQ_STATES), 0.0)
-    df["_delq60_bal"] = end_bal.where(md.isin((MD_60, 3, 4)), 0.0)
+    # Delinquency numerators (balance-weighted, end-of-period balance), thresholded
+    # on days past due and restricted to active (non-resolved) loans.
+    active = ~md.isin(_RESOLVED_STATES)
+    df["_delq30_bal"] = end_bal.where((dpd >= DPD_30) & active, 0.0)
+    df["_delq60_bal"] = end_bal.where((dpd >= DPD_60) & active, 0.0)
     # Denominator for delinquency shares: performing + delinquent balance, i.e.
     # everything not charged-off / paid-in-full this month.
-    df["_active_bal"] = end_bal.where(~md.isin((MD_CHARGEOFF, MD_PIF)), 0.0)
+    df["_active_bal"] = end_bal.where(active, 0.0)
     grp2 = df.groupby(["securitizationKey", "_month"])
     out["delq30_balance"] = grp2["_delq30_bal"].sum()
     out["delq60_balance"] = grp2["_delq60_bal"].sum()
