@@ -165,13 +165,34 @@ The right minimal slice:
 
 ---
 
-## Open questions to resolve before building
+## Open questions — RESOLVED 2026-06-05
 
-- **FICO cutoff:** 620, 640, or 660?
-- **Stress index orientation:** higher = worse (deterioration index) or
-  higher = better (credit-quality index, inverted)?
-- **COVID handling:** exclude, flag, or interpolate?
-- **Output cadence:** monthly only, or also a daily "freshness-adjusted"
-  level that ages the most recent point as new filings come in?
-- **Asset class scope:** subprime auto loans only, or include lease deals
-  whose WAVG residual + customer FICO fall into subprime territory?
+- **FICO cutoff:** **< 640** (conventional subprime line; maps to
+  `primeIndicator == 1`).
+- **Stress index orientation:** **higher = worse** (deterioration index;
+  ~0 in normal periods, spikes positive under stress).
+- **COVID handling:** **flag, keep in baseline** (Apr–Dec 2020 marked via a
+  `covid_flag` column and shaded in plots; not dropped or interpolated).
+- **Output cadence:** **monthly only** for v1 (daily freshness-adjusted level
+  deferred to v2).
+- **Asset class scope:** **subprime auto loans only** (no lease deals in v1).
+
+## v1 build status — 2026-06-05
+
+Implemented and unit-tested (`test_subprime_index.py`, 6/6 passing including a
+real-XML smoke test):
+
+- `universe.py` — `build_universe` (FICO + pool-size rule, per-trust exit
+  month) and `apply_universe` (filter + drop post-exit months).
+- `metrics.py` — `trust_month_metrics`: per-trust × month delinquency shares,
+  Current→30 roll rate, annualized net loss, recovery rate, plus the dollar
+  numerators/denominators so pooling is exact.
+- `index.py` — `pool_metrics` (loan-level pooled, balance-weighted performance
+  layer) + `build_stress_index` (rolling-24m Z-score, ±3σ cap, inverse-vol
+  weighting, higher=worse) and an end-to-end `build_index`.
+- `backtest.py` — `plot_index` (stress composite + components, COVID shaded)
+  and a NY Fed series loader hook for the validation overlay.
+- `fetch_subprime.py` — scoped downloader for selected subprime shelves.
+
+Validation against the NY Fed HHD subprime-auto series (item above) is pending
+real-data acquisition beyond the initial scoped Santander/Exeter pull.
