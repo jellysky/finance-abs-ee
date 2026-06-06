@@ -1,30 +1,49 @@
 """Build the subprime auto credit index from on-disk ABS-EE auto-loan XMLs.
 
-Reads every Trust / Auto Loans XML present on disk (per the listing), runs the
-parser -> universe -> metrics -> index chain, writes the derived tables to CSV,
-and optionally upserts them to a Postgres / Supabase project.
+Two build paths:
+
+  * **incremental** (default) — process ONE deal at a time: parse its full
+    monthly history, compute that deal's universe row + monthly metrics, then
+    discard the loan tapes. Memory stays bounded to a single deal, and each
+    deal's metrics are cached (keyed on its on-disk file set) so re-runs only
+    reprocess deals whose filings changed. This is what scales to the full
+    multi-year, multi-shelf history.
+  * **monolithic** (``--monolithic``) — parse every tape into one frame and
+    build in memory. Simple, but only viable for a few dozen files; kept for
+    small runs and parity testing.
+
+Both end at the same pooled performance + rolling-Z stress layers, write the
+derived tables to CSV, and can upsert to Postgres / Supabase.
 
 Usage:
-    python run_index.py                          # build + write CSVs to csv/
-    python run_index.py --plot                   # also save a chart to Heatmaps/
-    python run_index.py --db "$DATABASE_URL"     # also upsert to Postgres
-    python run_index.py --as-of 2026-06-05
+    python run_index.py                          # incremental build -> csv/
+    python run_index.py --plot                   # also save a chart
+    python run_index.py --as-of 2026-06-05 --db  # upsert (reads DATABASE_URL from .env)
+    python run_index.py --monolithic             # old in-memory path
+    python run_index.py --refresh                # ignore caches, reprocess all
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
+import pickle
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 import autoLoanParser
 import index as index_mod
+import metrics as metrics_mod
 import persist
+import universe as universe_mod
 import utility
 
 log = logging.getLogger("absee.subprime.run")
 ROOT = Path(__file__).resolve().parent
+LOAN_DIR = ROOT / "Auto Loans"
 
 
 def _load_dotenv() -> None:
@@ -39,33 +58,99 @@ def _load_dotenv() -> None:
             os.environ.setdefault(k.strip(), v.strip())
 
 
+# ---------------------------------------------------------------------------
+# Incremental, per-deal build (default; scales to the full history)
+# ---------------------------------------------------------------------------
+
+def _enrich(raw: pd.DataFrame) -> pd.DataFrame:
+    return autoLoanParser.append_calc_fields(autoLoanParser.clean_ald_files(raw))
+
+
+def _deal_metrics(deal_rows: pd.DataFrame, *, refresh: bool):
+    """Universe row + (exit-filtered) monthly metrics for ONE deal, cached.
+
+    The cache key includes the deal's on-disk filename set, so downloading a new
+    month invalidates only that deal. Returns ``(universe_row_df, tm_deal_df)``;
+    ``tm_deal_df`` is None when the deal doesn't qualify (or has no on-disk data).
+    """
+    secname = deal_rows["secname"].iloc[0]
+    on_disk = sorted(fn for fn in deal_rows["filename"] if (LOAN_DIR / fn).exists())
+    if not on_disk:
+        return None, None
+
+    key = hashlib.md5(("|".join([secname, *on_disk])).encode()).hexdigest()[:12]
+    cache = utility.PICKLED / f"deal_{key}.pkl"
+    if cache.exists() and not refresh:
+        with open(cache, "rb") as fh:
+            return pickle.load(fh)
+
+    raw = utility.read_ald_files(deal_rows, "Trust", "Auto Loans")
+    if raw.empty:
+        return None, None
+    enriched = _enrich(raw)
+    uni_row = universe_mod.build_universe(enriched)
+    # apply_universe drops non-qualifying trusts AND post-exit months — reuse it
+    # so the incremental path matches the monolithic build exactly.
+    filtered = universe_mod.apply_universe(enriched, uni_row)
+    tm_deal = metrics_mod.trust_month_metrics(filtered) if not filtered.empty else None
+
+    utility.PICKLED.mkdir(parents=True, exist_ok=True)
+    with open(cache, "wb") as fh:
+        pickle.dump((uni_row, tm_deal), fh, protocol=pickle.HIGHEST_PROTOCOL)
+    return uni_row, tm_deal
+
+
+def build_incremental(listing: str = "Inputs/dtABS.csv", *, refresh: bool = False):
+    """Per-deal incremental build -> (index_df, universe_df, trust_metrics_df)."""
+    df = utility.read_listing(listing)
+    sub = df[(df["entitytype"] == "Trust") & (df["assetclass"] == "Auto Loans")]
+    deals = sorted(sub["secname"].dropna().unique())
+
+    uni_rows, tm_parts = [], []
+    n_done = 0
+    for secname in deals:
+        uni_row, tm_deal = _deal_metrics(sub[sub["secname"] == secname], refresh=refresh)
+        if uni_row is None:
+            continue
+        uni_rows.append(uni_row)
+        if tm_deal is not None and not tm_deal.empty:
+            tm_parts.append(tm_deal)
+        n_done += 1
+        log.info("Deal %d/%d processed: %s", n_done, len(deals), secname)
+
+    if not uni_rows:
+        raise SystemExit("No on-disk auto-loan deals found. Run fetch_subprime.py first.")
+    uni = pd.concat(uni_rows).sort_values("shelf")
+    if not tm_parts:
+        return pd.DataFrame(), uni, pd.DataFrame()
+    tm = pd.concat(tm_parts).sort_index()
+    pooled = index_mod.pool_metrics(tm)
+    idx = index_mod.build_stress_index(pooled)
+    return idx, uni, tm
+
+
+# ---------------------------------------------------------------------------
+# Monolithic build (small runs / parity testing)
+# ---------------------------------------------------------------------------
+
 _CACHE = "enriched_auto_loans.pkl"
 
 
-def enriched_from_disk(listing: str = "Inputs/dtABS.csv", *, refresh: bool = False):
-    """Parse all on-disk auto-loan XMLs into the enriched frame (cached).
-
-    Parsing 2.6 GB of XML is slow, so the enriched result is pickled under
-    ``Pickled/`` and reused on subsequent runs. Pass ``refresh=True`` (or delete
-    the pickle) after downloading new filings.
-    """
+def build_monolithic(listing: str = "Inputs/dtABS.csv", *, refresh: bool = False):
+    """Parse every on-disk tape into one frame and build in memory (cached)."""
     cache_path = utility.PICKLED / _CACHE
     if cache_path.exists() and not refresh:
         log.info("Loading cached enriched frame from %s", cache_path)
-        return utility.pickle_load([_CACHE])
-    df = utility.read_listing(listing)
-    raw = utility.read_ald_files(df, "Trust", "Auto Loans")
-    if raw.empty:
-        raise SystemExit("No auto-loan XMLs on disk. Run fetch_subprime.py first.")
-    log.info("Parsed %d loan-month rows from disk", len(raw))
-    enriched = autoLoanParser.append_calc_fields(autoLoanParser.clean_ald_files(raw))
-    utility.pickle_save(enriched, _CACHE)
-    return enriched
-
-
-def build_from_disk(listing: str = "Inputs/dtABS.csv", *, refresh: bool = False):
-    """Parse (or load cached) on-disk auto-loan XMLs and build the index."""
-    return index_mod.build_index(enriched_from_disk(listing, refresh=refresh))
+        enriched = utility.pickle_load([_CACHE])
+    else:
+        df = utility.read_listing(listing)
+        raw = utility.read_ald_files(df, "Trust", "Auto Loans")
+        if raw.empty:
+            raise SystemExit("No auto-loan XMLs on disk. Run fetch_subprime.py first.")
+        log.info("Parsed %d loan-month rows from disk", len(raw))
+        enriched = _enrich(raw)
+        utility.pickle_save(enriched, _CACHE)
+    return index_mod.build_index(enriched)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,13 +163,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="Upsert to Postgres. Pass a DSN, or use bare --db to read "
                         "DATABASE_URL from .env / environment (keeps it off the CLI).")
     p.add_argument("--plot", action="store_true", help="Save an index chart")
+    p.add_argument("--monolithic", action="store_true",
+                   help="Use the in-memory build instead of the per-deal incremental one.")
     p.add_argument("--refresh", action="store_true",
-                   help="Re-parse XMLs instead of using the cached enriched frame.")
+                   help="Ignore caches and reprocess all deals / re-parse XMLs.")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s",
                         datefmt="%H:%M:%S")
 
-    idx, uni, tm = build_from_disk(args.listing, refresh=args.refresh)
+    builder = build_monolithic if args.monolithic else build_incremental
+    idx, uni, tm = builder(args.listing, refresh=args.refresh)
 
     print("\n=== UNIVERSE ===")
     print(uni[["wavg_fico", "original_pool", "n_loans", "qualifies", "reason"]].to_string())
@@ -94,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n=== INDEX MARKS ({len(idx)} months) ===")
     cols = ["n_trusts", "delq30plus", "delq60plus", "roll_c_to_30",
             "net_loss_annl", "recovery_rate", "stress_index", "covid_flag"]
-    print(idx[[c for c in cols if c in idx.columns]].round(4).to_string())
+    shown = idx[[c for c in cols if c in idx.columns]].round(4)
+    print((shown.iloc[::max(1, len(shown) // 30)] if len(shown) > 40 else shown).to_string())
 
     persist.to_csv(idx, tm, uni, args.out, as_of=args.as_of)
     if args.db:
