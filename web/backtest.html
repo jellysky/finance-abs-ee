@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Serention — Backtest a trade</title>
 <link rel="stylesheet" href="assets/style.css">
+<style>.wrap{max-width:1380px} .chart-box{height:380px} table.dt th,table.dt td{padding:8px 14px}</style>
 </head>
 <body>
 <header class="site"><div class="wrap">
@@ -41,8 +42,8 @@
     <div class="metrics-2" id="metrics"></div>
     <div class="chart-card"><h2>Index level &amp; cumulative PnL</h2>
       <div class="chart-box"><canvas id="cMain"></canvas></div></div>
-    <div class="chart-card"><h2>Cumulative margin cash flow</h2>
-      <p class="sub">Running variation margin exchanged (long perspective; short is the mirror). Dashed line = posted initial margin.</p>
+    <div class="chart-card"><h2>Capital posted: initial margin + top-ups</h2>
+      <p class="sub">Total equity each side has had to commit over time — initial margin plus cumulative margin top-ups. Flat = no calls; rising = repeated top-ups to stay in.</p>
       <div class="chart-box"><canvas id="cMargin"></canvas></div></div>
     <div class="chart-card"><h2>Monthly detail</h2>
       <div class="table-wrap"><table class="dt" id="tbl"></table></div></div>
