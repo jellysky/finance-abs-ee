@@ -223,8 +223,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Indexes (idempotent) once everything's loaded.
     with conn.cursor() as cur:
-        cur.execute("select count(*) from abs.loan_load_log where trust_id in %s",
-                    (tuple(int(x) for x in targets["trust_id"]),))
+        cur.execute("select count(*) from abs.loan_load_log where trust_id = any(%s)",
+                    ([int(x) for x in targets["trust_id"]],))
         n_loaded = cur.fetchone()[0]
         if n_loaded >= len(targets):
             log.info("All loaded; building indexes ...")
