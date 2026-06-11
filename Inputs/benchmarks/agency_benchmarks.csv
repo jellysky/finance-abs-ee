@@ -1,12 +1,29 @@
 date,series,metric,value,source,approx,note
-2021-05,fitch_subprime,delq60,2.58,Fitch US Auto ABS Index,0,pandemic trough
-2025-01,fitch_subprime,delq60,6.45,Fitch US Auto ABS Index,0,yoy reference
-2026-01,fitch_subprime,delq60,6.90,Fitch US Auto ABS Index,0,record high (Dec-25 collection)
-2026-03,fitch_subprime,delq60,6.11,Fitch US Auto ABS Index,0,tax-season dip
-2026-01,fitch_subprime,net_loss_annl,9.81,Fitch US Auto ABS Index,0,
-2026-03,fitch_subprime,net_loss_annl,8.80,Fitch US Auto ABS Index,0,
+2019-08,fitch_subprime,delq60,5.93,Fitch,0,pre-pandemic peak
+2021-05,fitch_subprime,delq60,2.58,Fitch,0,pandemic trough
+2023-01,fitch_subprime,delq60,5.93,Fitch,0,matched 2019 peak
+2023-07,fitch_subprime,delq60,5.31,Fitch,0,
+2023-09,fitch_subprime,delq60,6.10,Fitch,0,record (past 1996 high)
+2024-02,fitch_subprime,delq60,6.40,Fitch,0,record at the time
+2024-04,fitch_subprime,delq60,5.23,Fitch,0,worst April on record
+2025-01,fitch_subprime,delq60,6.45,Fitch,0,yoy reference
+2026-01,fitch_subprime,delq60,6.90,Fitch,0,record (Dec-25 collection)
+2026-03,fitch_subprime,delq60,6.11,Fitch,0,tax-season dip
+2021-05,fitch_subprime,net_loss_annl,1.84,Fitch,0,pandemic low
+2023-07,fitch_subprime,net_loss_annl,6.96,Fitch,0,
+2024-12,fitch_subprime,net_loss_annl,9.23,Fitch,0,year-end
+2025-01,fitch_subprime,net_loss_annl,9.51,Fitch,0,yoy reference
+2025-12,fitch_subprime,net_loss_annl,9.63,Fitch,0,year-end
+2026-01,fitch_subprime,net_loss_annl,9.81,Fitch,0,TTM avg 9.00
+2026-03,fitch_subprime,net_loss_annl,8.80,Fitch,0,
 2024-12,fitch_subprime,recovery,35.25,Fitch Subprime Recovery Index,0,
 2025-12,fitch_subprime,recovery,32.86,Fitch Subprime Recovery Index,0,
 2026-03,fitch_subprime,recovery,37.48,Fitch Subprime Recovery Index,0,
-2026-01,kbra_nonprime,net_loss_annl,10.90,KBRA US Auto Loan ABS Indices,0,highest in 15+ yrs
-2026-02,kbra_nonprime,net_loss_annl,11.25,KBRA US Auto Loan ABS Indices,1,derived from +35bps MoM
+2021-10,kbra_nonprime,net_loss_annl,3.58,KBRA,1,derived YoY from Oct-22
+2022-10,kbra_nonprime,net_loss_annl,6.72,KBRA,0,
+2025-02,kbra_nonprime,net_loss_annl,10.01,KBRA,1,derived YoY from Feb-26
+2026-01,kbra_nonprime,net_loss_annl,10.90,KBRA,0,highest in 15+ yrs
+2026-02,kbra_nonprime,net_loss_annl,11.25,KBRA,1,derived +35bps MoM
+2021-10,kbra_nonprime,delq60,3.66,KBRA,1,derived YoY from Oct-22
+2022-10,kbra_nonprime,delq60,5.27,KBRA,0,
+2022-10,kbra_nonprime,recovery,47.71,KBRA,0,
