@@ -27,20 +27,20 @@ function compute() {
   if (pts.length < 2) return null;
   const P0 = pts[0].p, im = notional / lev, maint = notional * 0.10;
   const hedgeNotional = hr * beta * V0;
-  let lLiq = -1, sLiq = -1;
+  // Maintenance model: each side tops up to initial margin when equity < maintenance.
+  let eqL = im, eqS = im, cumTopL = 0, cumTopS = 0, callsL = 0, callsS = 0, firstCallL = null, firstCallS = null, prev = P0;
   const rows = pts.map((pt, i) => {
     const ret = (pt.p - P0) / P0;
-    let lPnl = notional * ret, sPnl = -notional * ret;
-    let lEq = im + lPnl, sEq = im + sPnl;
-    if (lLiq < 0 && lEq < maint) lLiq = i;
-    if (sLiq < 0 && sEq < maint) sLiq = i;
-    if (lLiq >= 0 && i >= lLiq) { lEq = 0; lPnl = -im; }
-    if (sLiq >= 0 && i >= sLiq) { sEq = 0; sPnl = -im; }
-    const unhedged = V0 * (1 - beta * ret);
-    const hedge = hedgeNotional * ret;
-    return {ym: pt.ym, p: pt.p, ret, lPnl, sPnl, lEq, sEq, unhedged, hedge, net: unhedged + hedge};
+    const mtm = i === 0 ? 0 : notional * (pt.p - prev) / P0; prev = pt.p;
+    eqL += mtm; eqS += -mtm;
+    let topL = 0, topS = 0;
+    if (i > 0 && eqL < maint) { topL = im - eqL; eqL = im; cumTopL += topL; callsL++; if (!firstCallL) firstCallL = pt.ym; }
+    if (i > 0 && eqS < maint) { topS = im - eqS; eqS = im; cumTopS += topS; callsS++; if (!firstCallS) firstCallS = pt.ym; }
+    const unhedged = V0 * (1 - beta * ret), hedge = hedgeNotional * ret;
+    return {ym: pt.ym, p: pt.p, ret, lPnl: notional * ret, sPnl: -notional * ret,
+            lEq: eqL, sEq: eqS, topL, topS, cumTopL, cumTopS, unhedged, hedge, net: unhedged + hedge};
   });
-  return {rows, im, maint, notional, V0, lLiq, sLiq, field, lev};
+  return {rows, im, maint, notional, V0, callsL, callsS, firstCallL, firstCallS, field, lev};
 }
 
 function run() {
@@ -65,8 +65,8 @@ function step(i) {
   const r = MODEL.rows[i];
   $("monthflag").textContent = mlabel(r.ym) + "  ·  index " + r.p.toFixed(1);
   // traders
-  setTrader("l", r.lPnl, r.lEq, MODEL.lLiq, i);
-  setTrader("s", r.sPnl, r.sEq, MODEL.sLiq, i);
+  setTrader("l", r.lPnl, r.lEq, r.topL, r.cumTopL);
+  setTrader("s", r.sPnl, r.sEq, r.topS, r.cumTopS);
   // hedge
   $("pUn").textContent = fmtM(r.unhedged);
   $("pHedge").innerHTML = `<span class="${cl(r.hedge)}">${fmtM(r.hedge)}</span>`;
@@ -88,13 +88,13 @@ function step(i) {
   hedgeChart.update("none");
 }
 
-function setTrader(k, pnl, eq, liq, i) {
+function setTrader(k, pnl, eq, topThis, cumTop) {
   $(k + "Pnl").innerHTML = `<span class="${cl(pnl)}">${fmt$(pnl)}</span>`;
   $(k + "Eq").textContent = fmt$(eq);
-  const liquidated = liq >= 0 && i >= liq;
-  $(k + "Stat").innerHTML = liquidated
-    ? `<span class="liq">⚠ MARGIN CALL → liquidated ${mlabel(MODEL.rows[liq].ym)}</span>`
-    : `<span class="pos">Open</span>`;
+  $(k + "Stat").innerHTML = topThis > 0
+    ? `<span class="liq">⚠ Margin call — top up ${fmt$(topThis)}</span>`
+    : (cumTop > 0 ? `<span style="color:#f59e0b">Open · topped up ${fmt$(cumTop)}</span>`
+                  : `<span class="pos">Open</span>`);
 }
 
 function buildCharts(rows) {
@@ -113,17 +113,21 @@ function buildCharts(rows) {
 }
 
 function finish() {
-  const r = MODEL.rows[MODEL.rows.length - 1], rows = MODEL.rows;
-  const ror = p => MODEL.im ? (p / MODEL.im * 100).toFixed(0) + "%" : "—";
+  const rows = MODEL.rows, r = rows[rows.length - 1];
+  const line = (name, color, pnl, calls, cumTop, firstCall) => {
+    const cap = MODEL.im + cumTop, roc = (pnl / cap * 100).toFixed(0) + "% on capital";
+    const calltxt = calls > 0
+      ? ` — <span class="liq">${calls} margin call${calls > 1 ? "s" : ""}, topped up ${fmt$(cumTop)}</span> to stay in (else liquidated ${mlabel(firstCall)})`
+      : " — no margin calls";
+    return `<br>· <b style="color:${color}">${name}</b>: PnL ${fmt$(pnl)}, ${roc}${calltxt}.`;
+  };
   const minUn = Math.min(...rows.map(x => x.unhedged)), minNet = Math.min(...rows.map(x => x.net));
   const avoided = (MODEL.V0 - minUn) - (MODEL.V0 - minNet);
   $("results").style.display = "";
-  $("results").innerHTML = `<b>Result over ${rows.length - 1} months.</b>
-    Index moved <b>${(r.ret * 100).toFixed(0)}%</b> (${MODEL.field}).
-    <br>· <b style="color:#22c55e">Long Larry</b>: ${fmt$(r.lPnl)} (${ror(r.lPnl)} on margin)${MODEL.lLiq>=0?` — <span class="liq">liquidated ${mlabel(rows[MODEL.lLiq].ym)}</span>`:""}.
-    <br>· <b style="color:#e23b4e">Short Sarah</b>: ${fmt$(r.sPnl)} (${ror(r.sPnl)} on margin)${MODEL.sLiq>=0?` — <span class="liq">liquidated ${mlabel(rows[MODEL.sLiq].ym)}</span>`:""}.
-    <br>· <b>Hedger</b>: unhedged portfolio ${fmtM(rows[0].unhedged)} → <b>${fmtM(r.unhedged)}</b>;
-      hedged ended at <b>${fmtM(r.net)}</b>. The long-index hedge offset <b style="color:#22c55e">${fmtM(avoided)}</b> of drawdown.`;
+  $("results").innerHTML = `<b>Result over ${rows.length - 1} months.</b> Index moved <b>${(r.ret * 100).toFixed(0)}%</b> (${MODEL.field}).
+    ${line("Long Larry", "#22c55e", r.lPnl, MODEL.callsL, r.cumTopL, MODEL.firstCallL)}
+    ${line("Short Sarah", "#e23b4e", r.sPnl, MODEL.callsS, r.cumTopS, MODEL.firstCallS)}
+    <br>· <b>Hedger</b>: unhedged portfolio ${fmtM(rows[0].unhedged)} → <b>${fmtM(r.unhedged)}</b>; hedged ended at <b>${fmtM(r.net)}</b>. The long-index hedge offset <b style="color:#22c55e">${fmtM(avoided)}</b> of drawdown.`;
   $("status").textContent = "Done. Adjust inputs and run again.";
 }
 
