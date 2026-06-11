@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serention — Index</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><span class="dot"></span>SERENTION <small>Indices</small></a>
+  <nav><a href="index.html">Products</a></nav>
+</div></header>
+
+<main class="wrap">
+  <div class="phead">
+    <h1 id="title">Loading…</h1>
+    <span class="pill live">Live</span>
+    <span class="asof" id="asof"></span>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="chart-card">
+    <h2>Stress index</h2>
+    <p class="sub">Rolling-24-month z-score composite, higher = worse. ~0 in normal periods; shaded band = COVID accommodation window.</p>
+    <div class="chart-box"><canvas id="cStress"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Delinquency &amp; loss</h2>
+    <p class="sub">Balance-weighted, % of pool. 30+/60+ days past due (stock) and annualized net loss.</p>
+    <div class="chart-box"><canvas id="cPerf"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Validation vs NY Fed</h2>
+    <p class="sub">Our 30+ DPD vs NY Fed subprime &lt;620 (quarterly 30+ flow) and all-auto 90+ transition. Definitions/levels differ — co-movement &amp; timing are the signal.</p>
+    <div class="chart-box"><canvas id="cFed"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Pool composition</h2>
+    <p class="sub">Constituent deals (bars) and balance-weighted average borrower FICO (line) over time.</p>
+    <div class="chart-box"><canvas id="cComp"></canvas></div>
+  </div>
+
+  <div class="methodology" id="method"></div>
+  <a class="backlink" href="index.html">← All indices</a>
+  <p class="disclaimer">Serention indices are quantitative research signals derived from public SEC ABS-EE
+     filings and NY Fed data. They are provided for informational purposes only and are not investment
+     advice, an offer, or a solicitation. Borrower counts are estimated where noted.</p>
+</main>
+
+<footer class="site"><div class="wrap">
+  <div>© Serention</div><div>Data: SEC ABS-EE · NY Fed</div>
+</div></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script src="assets/product.js"></script>
+</body>
+</html>
