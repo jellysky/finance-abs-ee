@@ -27,7 +27,9 @@ function render(d) {
     ["30+ DPD", pct(L.delq30)], ["60+ DPD", pct(L.delq60)],
     ["Net loss (ann.)", pct(L.net_loss)], ["Recovery", pct(L.recovery)],
     ["Constituent deals", L.n_deals ?? "—"], ["Avg FICO", L.fico ?? "—"],
-    ["Borrowers (est.)", L.borrowers != null ? L.borrowers.toLocaleString() : "—"],
+    ["Borrowers", L.borrowers != null ? L.borrowers.toLocaleString() : "—"],
+    ["Avg loan term", L.orig_term != null ? L.orig_term.toFixed(0) + " mo" : "—"],
+    ["Realized WAL", L.realized_wal != null ? L.realized_wal.toFixed(0) + " mo" : "—"],
   ];
   document.getElementById("kpis").innerHTML = kpis.map(([l,v]) =>
     `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
@@ -66,6 +68,31 @@ function render(d) {
           grid:{drawOnChartArea:false}}}),
   });
   renderBenchmark(d);
+  renderDuration(d);
+  renderCompTable(d);
+}
+
+function renderDuration(d) {
+  const labels = d.series.map(s => s.date);
+  const g = k => d.series.map(s => s[k]);
+  line("cDur", labels, [
+    ds("WA original term", g("orig_term"), C.muted, {span: true}),
+    ds("WA remaining term", g("rem_term"), C.blue, {span: true}),
+    ds("Scheduled WAL", g("sched_wal"), C.amber, {span: true}),
+    ds("Realized WAL", g("realized_wal"), C.accent, {span: true}),
+  ], {yTitle: "Months"});
+}
+
+function renderCompTable(d) {
+  const n = v => v == null ? "—" : v.toLocaleString();
+  const rows = d.series.filter(s => s.date.slice(5, 7) === "12" || s.date === d.latest.as_of);
+  const body = rows.map(s => `<tr><td>${fmtMonth(s.date)}</td><td>${s.n_deals ?? "—"}</td>
+    <td>${n(s.borrowers)}</td><td>${s.fico ?? "—"}</td><td>${s.orig_term ?? "—"}</td>
+    <td>${s.rem_term ?? "—"}</td><td>${s.sched_wal ?? "—"}</td><td>${s.realized_wal ?? "—"}</td></tr>`).join("");
+  document.getElementById("compTable").innerHTML =
+    `<table class="dt"><thead><tr><th>Month</th><th>Deals</th><th>Borrowers</th><th>WA FICO</th>
+     <th>WA orig (mo)</th><th>WA rem (mo)</th><th>Sched WAL</th><th>Realized WAL</th></tr></thead>
+     <tbody>${body}</tbody></table>`;
 }
 
 function renderBenchmark(d) {

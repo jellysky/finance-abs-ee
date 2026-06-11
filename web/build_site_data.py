@@ -57,14 +57,13 @@ def load_benchmarks() -> dict:
 
 def build_auto_subprime() -> dict:
     idx = pd.read_csv(ROOT / "csv" / "index_marks.csv", parse_dates=["month"]).sort_values("month")
-    comp_path = ROOT / "csv" / "composition_estimate.csv"
+    comp_path = ROOT / "csv" / "composition_by_month.csv"   # exact, from loan-level table
     if comp_path.exists():
         comp = pd.read_csv(comp_path)
-        comp = comp.rename(columns={comp.columns[0]: "month"})
         comp["month"] = pd.to_datetime(comp["month"])
-        idx = idx.merge(comp[["month", "n_deals", "est_borrowers", "avg_fico"]],
-                        on="month", how="left")
-    for c in ("n_deals", "est_borrowers", "avg_fico"):
+        idx = idx.merge(comp, on="month", how="left")
+    for c in ("n_borrowers", "wa_fico", "wa_orig_term", "wa_rem_term",
+              "sched_wal_months", "realized_wal_months"):
         if c not in idx.columns:
             idx[c] = pd.NA
 
@@ -77,8 +76,12 @@ def build_auto_subprime() -> dict:
         "net_loss": _pct(r.get("net_loss_annl")),
         "recovery": _pct(r.get("recovery_rate")),
         "n_deals": _int(r.get("n_trusts")),
-        "borrowers": _int(r.get("est_borrowers")),
-        "fico": _int(r.get("avg_fico")),
+        "borrowers": _int(r.get("n_borrowers")),
+        "fico": _int(r.get("wa_fico")),
+        "orig_term": _num(r.get("wa_orig_term"), 1),
+        "rem_term": _num(r.get("wa_rem_term"), 1),
+        "sched_wal": _num(r.get("sched_wal_months"), 1),
+        "realized_wal": _num(r.get("realized_wal_months"), 1),
     } for _, r in idx.iterrows()]
 
     last = idx.iloc[-1]
@@ -90,8 +93,12 @@ def build_auto_subprime() -> dict:
         "net_loss": _pct(last.get("net_loss_annl")),
         "recovery": _pct(last.get("recovery_rate")),
         "n_deals": _int(last.get("n_trusts")),
-        "fico": _int(last.get("avg_fico")),
-        "borrowers": _int(last.get("est_borrowers")),
+        "fico": _int(last.get("wa_fico")),
+        "borrowers": _int(last.get("n_borrowers")),
+        "orig_term": _num(last.get("wa_orig_term"), 1),
+        "rem_term": _num(last.get("wa_rem_term"), 1),
+        "sched_wal": _num(last.get("sched_wal_months"), 1),
+        "realized_wal": _num(last.get("realized_wal_months"), 1),
         "first": idx.iloc[0]["month"].strftime("%Y-%m-%d"),
     }
     return {

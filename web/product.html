@@ -50,6 +50,18 @@
   </div>
 
   <div class="chart-card">
+    <h2>Loan term &amp; weighted-average life</h2>
+    <p class="sub">Balance-weighted across index-included loans: original &amp; remaining term, scheduled WAL (contractual, no prepay) and realized WAL (projected at the observed monthly run-off, incl. prepay &amp; default). Months.</p>
+    <div class="chart-box"><canvas id="cDur"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Pool composition by month</h2>
+    <p class="sub">Exact figures from the loan-level tapes (index-included, outstanding loans) — year-end snapshots and latest. Terms/WAL in months.</p>
+    <div class="table-wrap" id="compTable"></div>
+  </div>
+
+  <div class="chart-card">
     <h2>Rating-agency benchmark</h2>
     <p class="sub">Our annualized net loss vs KBRA Non-Prime and Fitch Subprime auto-ABS indices. Those series are paywalled, so points are logged from public monthly disclosures and fill in over time (◇ markers = agency readings). Our deeper &lt;640 cut runs a touch higher, as expected.</p>
     <div class="chart-box"><canvas id="cBench"></canvas></div>
