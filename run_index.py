@@ -45,6 +45,32 @@ log = logging.getLogger("absee.subprime.run")
 ROOT = Path(__file__).resolve().parent
 LOAN_DIR = ROOT / "Auto Loans"
 
+# Numeric fields coerced to float64 at read time so the per-deal frame never
+# exists as a multi-GB all-object blob (the cause of the build's memory-swap
+# stall on an 8 GB machine).
+_const = autoLoanParser.const
+INDEX_NUMERIC_COLS = (
+    _const.decimalFields() + _const.integerFields() + _const.rateFields()
+)
+# Raw XML columns the subprime-index pipeline actually consumes (clean_ald_files
+# + append_calc_fields + universe + metrics). Everything else — unused object
+# string columns such as originatorName / primaryLoanServicerName / model name —
+# is dropped at read time for headroom. Derived columns (monthsDelinquent,
+# consumerCreditScore, beginningBalanceAtCutoffDate, …) are produced downstream
+# and need not appear here. securitizationKey/shelf/reportDate are injected by
+# read_ald_files after the prune, so they are intentionally absent.
+INDEX_KEEP_COLS = set(
+    INDEX_NUMERIC_COLS
+    + _const.dateFields()
+    + [
+        "assetNumber",
+        "securitizationKey",
+        "obligorCreditScoreType",
+        "obligorGeographicLocation",
+        "vehicleManufacturerName",
+    ]
+)
+
 
 def _load_dotenv() -> None:
     """Load KEY=VALUE pairs from a local .env into the environment (no override)."""
@@ -84,7 +110,10 @@ def _deal_metrics(deal_rows: pd.DataFrame, *, refresh: bool):
         with open(cache, "rb") as fh:
             return pickle.load(fh)
 
-    raw = utility.read_ald_files(deal_rows, "Trust", "Auto Loans")
+    raw = utility.read_ald_files(
+        deal_rows, "Trust", "Auto Loans",
+        keep_cols=INDEX_KEEP_COLS, numeric_cols=INDEX_NUMERIC_COLS,
+    )
     if raw.empty:
         return None, None
     enriched = _enrich(raw)

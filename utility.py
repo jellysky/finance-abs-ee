@@ -553,10 +553,34 @@ def read_ald_xml(path: str | Path) -> pd.DataFrame:
     return pd.DataFrame.from_dict(doc["assetData"]["assets"])
 
 
-def read_ald_files(df: pd.DataFrame, entity_type: str, asset_class: str) -> pd.DataFrame:
-    """Read and concatenate all XMLs matching (entity_type, asset_class)."""
+def read_ald_files(
+    df: pd.DataFrame,
+    entity_type: str,
+    asset_class: str,
+    *,
+    keep_cols: set[str] | None = None,
+    numeric_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Read and concatenate all XMLs matching (entity_type, asset_class).
+
+    Optional memory controls (default off → byte-for-byte the original behavior;
+    the reporting/vetting path in ``main.py`` calls this without them). They let
+    the subprime-index build avoid materializing a multi-GB *all-object* frame on
+    a small-RAM machine, which otherwise swaps and turns a ~90 s coercion into
+    >80 min:
+
+      * ``keep_cols`` — drop every XML column not in this set as each file is
+        read. The injected ``securitizationKey`` / ``shelf`` / ``reportDate``
+        always survive (they are added after the prune).
+      * ``numeric_cols`` — coerce these columns to numeric *per file*, before
+        concatenation, so the concatenated intermediate is float64 (8 B/value)
+        rather than object strings (~50 B/value). ``to_numeric`` is row-wise and
+        idempotent, so a later ``clean_ald_files`` coercion is a no-op and the
+        enriched output is identical to coercing after the concat.
+    """
     mask = (df["entitytype"] == entity_type) & (df["assetclass"] == asset_class)
     frames: list[pd.DataFrame] = []
+    keep = set(keep_cols) if keep_cols is not None else None
     for _, row in df.loc[mask].iterrows():
         path = ROOT / row["assetclass"] / row["filename"]
         if not path.exists():
@@ -564,6 +588,12 @@ def read_ald_files(df: pd.DataFrame, entity_type: str, asset_class: str) -> pd.D
             continue
         log.info("Reading %s ...", path.name)
         temp = read_ald_xml(path)
+        if keep is not None:
+            temp = temp[[c for c in temp.columns if c in keep]]
+        if numeric_cols:
+            for c in numeric_cols:
+                if c in temp.columns:
+                    temp[c] = pd.to_numeric(temp[c], errors="coerce")
         temp["securitizationKey"] = row["secname"]
         temp["shelf"] = _derive_shelf(row["secname"])
         temp["reportDate"] = row["reportdate"]
