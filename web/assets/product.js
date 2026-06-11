@@ -65,6 +65,36 @@ function render(d) {
       y1:{position:"right", title:{display:true,text:"Avg FICO"}, min:540, max:660,
           grid:{drawOnChartArea:false}}}),
   });
+  renderBenchmark(d);
+}
+
+function renderBenchmark(d) {
+  const a = d.agency || {};
+  const card = document.getElementById("cBench").closest(".chart-card");
+  if (!Object.keys(a).length) { if (card) card.style.display = "none"; return; }
+  const labels = d.series.map(s => s.date);
+  const marker = (pts, color, label) => ({type:"line", label, data: mapTo(labels, pts || [], "value"),
+    borderColor: color, backgroundColor: color, showLine: false, pointRadius: 6, pointStyle: "rectRot"});
+  new Chart(document.getElementById("cBench"), {data:{labels, datasets:[
+    {type:"line", label:"OUR net loss % (ann.)", data: d.series.map(s => s.net_loss),
+     borderColor: C.accent, borderWidth: 2, pointRadius: 0, tension: .25, spanGaps: true},
+    marker(a.kbra_nonprime && a.kbra_nonprime.net_loss_annl, C.blue, "KBRA Non-Prime"),
+    marker(a.fitch_subprime && a.fitch_subprime.net_loss_annl, C.green, "Fitch Subprime"),
+  ]}, options: baseOpts({yTitle:"Annualized net loss (%)"})});
+
+  const last = arr => (arr && arr.length) ? arr[arr.length - 1].value : null;
+  const m = (s, k) => a[s] ? a[s][k] : null;
+  const v = x => x == null ? "—" : x.toFixed(1) + "%";
+  const L = d.latest;
+  const rows = [
+    ["Annualized net loss", L.net_loss, last(m("kbra_nonprime","net_loss_annl")), last(m("fitch_subprime","net_loss_annl"))],
+    ["60+ day delinquency", L.delq60, last(m("kbra_nonprime","delq60")), last(m("fitch_subprime","delq60"))],
+    ["Recovery rate", L.recovery, last(m("kbra_nonprime","recovery")), last(m("fitch_subprime","recovery"))],
+  ];
+  document.getElementById("benchTable").innerHTML =
+    `<table class="dt"><thead><tr><th>Latest reading</th><th>Ours (&lt;640)</th><th>KBRA Non-Prime</th><th>Fitch Subprime</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${r[0]}</td><td>${v(r[1])}</td><td>${v(r[2])}</td><td>${v(r[3])}</td></tr>`).join("") +
+    `</tbody></table>`;
 }
 
 function ds(label, data, color, o = {}) {

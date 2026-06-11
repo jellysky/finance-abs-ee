@@ -40,6 +40,21 @@ def _fed(fn):
             for _, r in d.iterrows()]
 
 
+def load_benchmarks() -> dict:
+    """Rating-agency benchmark figures logged from public disclosures (see log_benchmarks.py)."""
+    p = ROOT / "Inputs" / "benchmarks" / "agency_benchmarks.csv"
+    if not p.exists():
+        return {}
+    df = pd.read_csv(p)
+    out: dict = {}
+    for (series, metric), g in df.groupby(["series", "metric"]):
+        pts = [{"date": str(r["date"]) + "-01", "value": _num(r["value"], 2),
+                "approx": int(r.get("approx", 0)) == 1}
+               for _, r in g.sort_values("date").iterrows() if pd.notna(r["value"])]
+        out.setdefault(series, {})[metric] = pts
+    return out
+
+
 def build_auto_subprime() -> dict:
     idx = pd.read_csv(ROOT / "csv" / "index_marks.csv", parse_dates=["month"]).sort_values("month")
     comp_path = ROOT / "csv" / "composition_estimate.csv"
@@ -91,6 +106,7 @@ def build_auto_subprime() -> dict:
             "auto90_annl": _fed("fed_auto_90plus_transition.csv"),
         },
         "covid": {"start": "2020-04-01", "end": "2020-12-31"},
+        "agency": load_benchmarks(),
         "methodology": (
             "Loan-level, balance-weighted composite built from SEC ABS-EE filings of "
             "subprime auto securitizations (WAVG issuance FICO < 640). Components: 30+/60+ "

@@ -1,0 +1,12 @@
+date,series,metric,value,source,approx,note
+2021-05,fitch_subprime,delq60,2.58,Fitch US Auto ABS Index,0,pandemic trough
+2025-01,fitch_subprime,delq60,6.45,Fitch US Auto ABS Index,0,yoy reference
+2026-01,fitch_subprime,delq60,6.90,Fitch US Auto ABS Index,0,record high (Dec-25 collection)
+2026-03,fitch_subprime,delq60,6.11,Fitch US Auto ABS Index,0,tax-season dip
+2026-01,fitch_subprime,net_loss_annl,9.81,Fitch US Auto ABS Index,0,
+2026-03,fitch_subprime,net_loss_annl,8.80,Fitch US Auto ABS Index,0,
+2024-12,fitch_subprime,recovery,35.25,Fitch Subprime Recovery Index,0,
+2025-12,fitch_subprime,recovery,32.86,Fitch Subprime Recovery Index,0,
+2026-03,fitch_subprime,recovery,37.48,Fitch Subprime Recovery Index,0,
+2026-01,kbra_nonprime,net_loss_annl,10.90,KBRA US Auto Loan ABS Indices,0,highest in 15+ yrs
+2026-02,kbra_nonprime,net_loss_annl,11.25,KBRA US Auto Loan ABS Indices,1,derived from +35bps MoM
