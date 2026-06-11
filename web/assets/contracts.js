@@ -6,9 +6,9 @@ window.SERENTION = {
   priceScale: 1e8,                   // oracle stores index level * 1e8
   usdcDecimals: 6,
   addresses: {
-    usdc: "",                        // <- MockUSDC
-    oracle: "",                      // <- IndexOracle
-    margined: ""                     // <- MarginedIndex
+    usdc: "0x99E8262680911BcBcF58179B3F5Cf44b0c923378",      // MockUSDC (Sepolia)
+    oracle: "0x4CEd12494384E1b343c4527CE06AE436263C9e26",    // IndexOracle (Sepolia)
+    margined: "0x8371482B4d068fC989d77C7D1e0f3bE78164b387"   // MarginedIndex (Sepolia)
   },
   abi: {
     usdc: [
