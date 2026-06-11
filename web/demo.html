@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serention — Live trade demo</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .traders{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0}
+  .trader{border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--panel)}
+  .trader.long{border-top:3px solid var(--good)} .trader.short{border-top:3px solid var(--accent)}
+  .trader h3{margin:0 0 4px;font-size:16px} .trader .who{color:var(--muted);font-size:13px;margin-bottom:10px}
+  .trader .r{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid var(--border)}
+  .trader .r:last-child{border:none} .trader .r .v{font-family:var(--mono)}
+  .big{font-size:24px;font-weight:700;font-family:var(--mono)}
+  .monthflag{font-family:var(--mono);font-size:15px;color:var(--accent2)}
+  .liq{color:var(--accent);font-weight:700}
+  @media(max-width:640px){.traders{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><span class="dot"></span>SERENTION <small>Indices</small></a>
+  <nav><a href="index.html">Products</a><a href="product.html?slug=auto-subprime">Index</a><a href="backtest.html">Backtest</a><a href="trade.html">Trade (testnet)</a></nav>
+</div></header>
+
+<main class="wrap">
+  <div class="phead"><h1>Live trade demo</h1><span class="monthflag" id="monthflag"></span></div>
+  <p class="note">Watch a margined trade on the Auto Subprime Credit Index play out month by month over real history, then see how a subprime-auto lender uses the same index to hedge. Test USDC; illustrative only.</p>
+
+  <div class="tool">
+    <div class="form-grid">
+      <div><label class="fld">Underlying</label><select id="series">
+        <option value="delq30">30+ DPD rate (%)</option><option value="delq60">60+ DPD rate (%)</option><option value="net_loss">Net loss rate (%)</option></select></div>
+      <div><label class="fld">Entry month</label><input type="month" id="entry"></div>
+      <div><label class="fld">Exit month</label><input type="month" id="exit"></div>
+      <div><label class="fld">Notional each (USDC)</label><input type="number" id="notional" value="100000" step="10000"></div>
+      <div><label class="fld">Leverage</label><select id="lev">
+        <option value="1">1× (fully collateralized)</option><option value="2">2×</option><option value="5">5×</option></select></div>
+      <div><label class="fld">Speed</label><select id="speed"><option value="650">Normal</option><option value="300">Fast</option><option value="1100">Slow</option></select></div>
+      <div><button id="run">▶ Simulate trade</button></div>
+      <div><button id="reset" class="ghost">Reset</button></div>
+    </div>
+    <div class="statusline" id="status"></div>
+  </div>
+
+  <h2 class="section-title">Part 1 — Two traders, opposite views</h2>
+  <div class="traders">
+    <div class="trader long"><h3>📈 Long Larry</h3><div class="who">Believes subprime credit will deteriorate (index ↑)</div>
+      <div class="r"><span>PnL</span><span class="v big" id="lPnl">—</span></div>
+      <div class="r"><span>Collateral posted</span><span class="v" id="lColl">—</span></div>
+      <div class="r"><span>Account equity</span><span class="v" id="lEq">—</span></div>
+      <div class="r"><span>Status</span><span class="v" id="lStat">—</span></div></div>
+    <div class="trader short"><h3>📉 Short Sarah</h3><div class="who">Believes credit will improve / hold (index ↓)</div>
+      <div class="r"><span>PnL</span><span class="v big" id="sPnl">—</span></div>
+      <div class="r"><span>Collateral posted</span><span class="v" id="sColl">—</span></div>
+      <div class="r"><span>Account equity</span><span class="v" id="sEq">—</span></div>
+      <div class="r"><span>Status</span><span class="v" id="sStat">—</span></div></div>
+  </div>
+  <div class="chart-card"><h2>Index level &amp; each trader's equity</h2><div class="chart-box"><canvas id="cTrade"></canvas></div></div>
+
+  <h2 class="section-title">Part 2 — How a subprime-auto lender hedges</h2>
+  <p class="note">A lender holds a pool of subprime auto loans (long credit — it loses value as delinquencies rise). It hedges by going <b>long the index</b>, sized to its credit sensitivity. Portfolio mark is an illustrative model off the index, not a market quote.</p>
+  <div class="tool"><div class="form-grid">
+    <div><label class="fld">Pool value (USD)</label><input type="number" id="pool" value="10000000" step="1000000"></div>
+    <div><label class="fld">Credit sensitivity β</label><input type="number" id="beta" value="0.4" step="0.05" min="0" max="2">
+      <span class="sub">portfolio loses β× the index's % move</span></div>
+    <div><label class="fld">Hedge ratio</label><input type="number" id="hr" value="100" step="10" min="0" max="150"><span class="sub">% of full hedge</span></div>
+  </div></div>
+  <div class="kpis">
+    <div class="kpi"><div class="l">Portfolio — unhedged</div><div class="v" id="pUn">—</div></div>
+    <div class="kpi"><div class="l">Hedge PnL (long index)</div><div class="v" id="pHedge">—</div></div>
+    <div class="kpi"><div class="l">Portfolio — hedged</div><div class="v" id="pNet">—</div></div>
+    <div class="kpi"><div class="l">Drawdown avoided</div><div class="v" id="pSaved">—</div></div>
+  </div>
+  <div class="chart-card"><h2>Unhedged vs hedged portfolio value</h2><div class="chart-box"><canvas id="cHedge"></canvas></div></div>
+
+  <div class="methodology" id="results" style="display:none"></div>
+  <a class="backlink" href="backtest.html">← Full backtest tool</a>
+</main>
+
+<footer class="site"><div class="wrap"><div>© Serention</div><div>Illustrative demo · test data</div></div></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/demo.js"></script>
+</body>
+</html>
