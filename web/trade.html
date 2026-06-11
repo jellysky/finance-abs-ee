@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serention — Trade (testnet)</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><span class="dot"></span>SERENTION <small>Indices</small></a>
+  <nav><a href="index.html">Products</a><a href="product.html?slug=auto-subprime">Index</a><a href="backtest.html">Backtest</a></nav>
+</div></header>
+
+<main class="wrap">
+  <div class="phead"><h1>Trade the index</h1><span class="pill planned">Sepolia testnet</span>
+    <span class="wallet" id="wallet">not connected</span></div>
+  <p class="note"><b>Testnet proof-of-concept.</b> Margined, cash-settled position on the Auto Subprime Credit Index, collateralized with test USDC.
+     LONG profits if credit deteriorates (index rises); SHORT mirrors it. Payoff: notional × (price − entry) / entry. No real funds — Sepolia only.</p>
+
+  <div id="needsetup" class="note" style="display:none">
+    Contracts aren't configured yet. Deploy them (<code>contracts/README.md</code>) and paste the addresses into
+    <code>web/assets/contracts.js</code>, then reload.
+  </div>
+
+  <div class="tool"><button id="connect">Connect wallet</button>
+    <div class="statusline" id="status"></div></div>
+
+  <div id="app" style="display:none">
+    <div class="kpis">
+      <div class="kpi"><div class="l">Index price</div><div class="v" id="kPrice">—</div></div>
+      <div class="kpi"><div class="l">Wallet USDC</div><div class="v" id="kWallet">—</div></div>
+      <div class="kpi"><div class="l">Collateral</div><div class="v" id="kColl">—</div></div>
+      <div class="kpi"><div class="l">Position PnL</div><div class="v" id="kPnl">—</div></div>
+      <div class="kpi"><div class="l">Equity</div><div class="v" id="kEquity">—</div></div>
+    </div>
+
+    <div class="tool">
+      <h2 style="margin:0 0 12px;font-size:16px">1 · Get test USDC &amp; fund margin</h2>
+      <div class="form-grid">
+        <div><button id="faucet" class="ghost">Faucet: mint 100,000 USDC</button></div>
+        <div><label class="fld">Deposit / withdraw (USDC)</label><input type="number" id="amt" value="20000" min="0" step="1000"></div>
+        <div><button id="deposit">Approve &amp; deposit</button></div>
+        <div><button id="withdraw" class="ghost">Withdraw</button></div>
+      </div>
+    </div>
+
+    <div class="tool">
+      <h2 style="margin:0 0 12px;font-size:16px">2 · Open a position</h2>
+      <div class="form-grid">
+        <div><label class="fld">Side</label>
+          <select id="side"><option value="long">Long (credit worsens)</option><option value="short">Short (credit improves)</option></select></div>
+        <div><label class="fld">Notional (USDC)</label><input type="number" id="notional" value="100000" min="1" step="1000"></div>
+        <div><button id="open">Open</button></div>
+        <div><button id="close" class="ghost">Close position</button></div>
+      </div>
+      <p class="sub" id="posline" style="margin-top:10px"></p>
+    </div>
+  </div>
+
+  <a class="backlink" href="backtest.html">← Backtest a trade first</a>
+</main>
+
+<footer class="site"><div class="wrap"><div>© Serention</div><div>Sepolia testnet · unaudited POC</div></div></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.1/dist/ethers.umd.min.js"></script>
+<script src="assets/contracts.js"></script>
+<script src="assets/trade.js"></script>
+</body>
+</html>

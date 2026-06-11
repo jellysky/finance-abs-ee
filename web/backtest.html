@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serention — Backtest a trade</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><span class="dot"></span>SERENTION <small>Indices</small></a>
+  <nav><a href="index.html">Products</a><a href="product.html?slug=auto-subprime">Index</a><a href="trade.html">Trade (testnet)</a></nav>
+</div></header>
+
+<main class="wrap">
+  <div class="phead"><h1>Backtest a margined trade</h1></div>
+  <p class="note">Models a total-return position on the index: <b>PnL = side × notional × (index<sub>t</sub> − index<sub>entry</sub>) / index<sub>entry</sub></b>.
+     Long profits when credit deteriorates (the rate rises); short is the mirror. Monthly variation margin is settled to cash.
+     Historical, illustrative only — not a forecast or investment advice.</p>
+
+  <div class="tool">
+    <div class="form-grid">
+      <div><label class="fld">Underlying</label>
+        <select id="series">
+          <option value="delq30">30+ DPD rate (%)</option>
+          <option value="delq60">60+ DPD rate (%)</option>
+          <option value="net_loss">Net loss rate (% ann.)</option>
+        </select></div>
+      <div><label class="fld">Entry month</label><input type="month" id="entry"></div>
+      <div><label class="fld">Exit month</label><input type="month" id="exit"></div>
+      <div><label class="fld">Notional (USDC)</label><input type="number" id="notional" value="100000" min="1" step="1000"></div>
+      <div><label class="fld">Initial margin %</label><input type="number" id="im" value="20" min="1" max="100" step="1"></div>
+      <div><button id="run">Run backtest</button></div>
+    </div>
+    <div class="statusline" id="status"></div>
+  </div>
+
+  <div id="results" style="display:none">
+    <div class="metrics-2" id="metrics"></div>
+    <div class="chart-card"><h2>Index level &amp; cumulative PnL</h2>
+      <div class="chart-box"><canvas id="cMain"></canvas></div></div>
+    <div class="chart-card"><h2>Cumulative margin cash flow</h2>
+      <p class="sub">Running variation margin exchanged (long perspective; short is the mirror). Dashed line = posted initial margin.</p>
+      <div class="chart-box"><canvas id="cMargin"></canvas></div></div>
+    <div class="chart-card"><h2>Monthly detail</h2>
+      <div class="table-wrap"><table class="dt" id="tbl"></table></div></div>
+  </div>
+
+  <a class="backlink" href="product.html?slug=auto-subprime">← Index overview</a>
+</main>
+
+<footer class="site"><div class="wrap"><div>© Serention</div><div>Historical backtest · illustrative</div></div></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="assets/backtest.js"></script>
+</body>
+</html>
