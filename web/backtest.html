@@ -30,6 +30,8 @@
       <div><label class="fld">Exit month</label><input type="month" id="exit"></div>
       <div><label class="fld">Notional (USDC)</label><input type="number" id="notional" value="100000" min="1" step="1000"></div>
       <div><label class="fld">Initial margin %</label><input type="number" id="im" value="20" min="1" max="100" step="1"></div>
+      <div><label class="fld">Maintenance margin %</label><input type="number" id="mm" value="10" min="0" max="100" step="1"></div>
+      <div><label class="fld">Gas / round-trip (USD)</label><input type="number" id="gas" value="0" min="0" step="5"><span class="sub">0 on testnet; ~$40 mainnet est.</span></div>
       <div><button id="run">Run backtest</button></div>
     </div>
     <div class="statusline" id="status"></div>

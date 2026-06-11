@@ -40,7 +40,7 @@ function compute() {
     const hedge = hedgeNotional * ret;
     return {ym: pt.ym, p: pt.p, ret, lPnl, sPnl, lEq, sEq, unhedged, hedge, net: unhedged + hedge};
   });
-  return {rows, im, notional, V0, lLiq, sLiq, field, lev};
+  return {rows, im, maint, notional, V0, lLiq, sLiq, field, lev};
 }
 
 function run() {
@@ -48,7 +48,8 @@ function run() {
   MODEL = compute();
   if (!MODEL) { $("status").textContent = "Not enough data in that window."; return; }
   const {rows} = MODEL;
-  $("lColl").textContent = fmt$(MODEL.im); $("sColl").textContent = fmt$(MODEL.im);
+  $("lIM").textContent = $("sIM").textContent = fmt$(MODEL.im);
+  $("lMM").textContent = $("sMM").textContent = fmt$(MODEL.maint);
   buildCharts(rows);
   let i = 0, speed = +$("speed").value;
   $("run").disabled = true;
@@ -77,6 +78,8 @@ function step(i) {
   tradeChart.data.datasets[0].data = sl(x => x.p);
   tradeChart.data.datasets[1].data = sl(x => x.lEq);
   tradeChart.data.datasets[2].data = sl(x => x.sEq);
+  tradeChart.data.datasets[3].data = sl(() => MODEL.im);
+  tradeChart.data.datasets[4].data = sl(() => MODEL.maint);
   tradeChart.update("none");
   hedgeChart.data.labels = sl(x => mlabel(x.ym));
   hedgeChart.data.datasets[0].data = sl(x => x.unhedged);
@@ -90,7 +93,7 @@ function setTrader(k, pnl, eq, liq, i) {
   $(k + "Eq").textContent = fmt$(eq);
   const liquidated = liq >= 0 && i >= liq;
   $(k + "Stat").innerHTML = liquidated
-    ? `<span class="liq">LIQUIDATED ${mlabel(MODEL.rows[liq].ym)}</span>`
+    ? `<span class="liq">⚠ MARGIN CALL → liquidated ${mlabel(MODEL.rows[liq].ym)}</span>`
     : `<span class="pos">Open</span>`;
 }
 
@@ -101,7 +104,8 @@ function buildCharts(rows) {
   const ds = (label, color, axis, dash) => ({label, data:[], borderColor:color, backgroundColor:color, borderWidth:2, pointRadius:0, tension:.2, yAxisID:axis||"y", borderDash:dash||[]});
   if (tradeChart) tradeChart.destroy(); if (hedgeChart) hedgeChart.destroy();
   tradeChart = new Chart($("cTrade"), {type:"line", data:{labels:[], datasets:[
-    ds("Index level", C.muted, "y1"), ds("Long Larry equity", C.green), ds("Short Sarah equity", C.accent)]},
+    ds("Index level", C.muted, "y1"), ds("Long Larry equity", C.green), ds("Short Sarah equity", C.accent),
+    ds("Initial margin", C.blue, "y", [6,4]), ds("Maintenance margin (call below)", C.amber, "y", [3,3])]},
     options: opts("Account equity ($)", {y1:{position:"right",title:{display:true,text:"Index"},grid:{drawOnChartArea:false}}})});
   hedgeChart = new Chart($("cHedge"), {type:"line", data:{labels:[], datasets:[
     ds("Portfolio — unhedged", C.accent), ds("Portfolio — hedged", C.green), ds("Hedge PnL", C.blue, "y", [5,4])]},
@@ -126,6 +130,6 @@ function finish() {
 function reset() {
   if (anim) { clearInterval(anim); anim = null; }
   $("run").disabled = false; $("results").style.display = "none"; $("monthflag").textContent = "";
-  ["lPnl","lEq","lStat","sPnl","sEq","sStat","pUn","pHedge","pNet","pSaved"].forEach(id => $(id).textContent = "—");
+  ["lPnl","lIM","lMM","lEq","lStat","sPnl","sIM","sMM","sEq","sStat","pUn","pHedge","pNet","pSaved"].forEach(id => $(id).textContent = "—");
   $("status").textContent = "";
 }
