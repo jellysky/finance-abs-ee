@@ -34,10 +34,18 @@ log = logging.getLogger("absee.subprime.fetch")
 DEFAULT_SHELVES = ["Santander Drive", "Exeter"]
 # Full subprime panel shelves.
 PANEL_SHELVES = ["Santander Drive", "Exeter", "AmeriCredit", "Bridgecrest", "Carvana"]
-# Vintage buckets (deals live ~4-5yr, so these chain to cover ~2019-present).
-_BUCKETS = [("early", lambda y: y is not None and y <= 2021),
-            ("mid", lambda y: y is not None and 2022 <= y <= 2023),
-            ("late", lambda y: y is not None and y >= 2024)]
+# Vintage buckets. Deals carry ABS-EE loan tapes from 2017 (Reg AB II) and live
+# ~4-5yr, so to get continuous *calendar* coverage we need staggered vintages.
+# Single-year buckets for the early years: a coarse "<=2021" bucket + the
+# "most filings" pick below biases toward still-active 2020-21 deals and leaves
+# 2017-2019 with only one constituent (the seasoning-confounded "single-deal
+# era"). One bucket per early year forces a 2017, 2018, and 2019 pick.
+_BUCKETS = [("2017", lambda y: y == 2017),
+            ("2018", lambda y: y == 2018),
+            ("2019", lambda y: y == 2019),
+            ("2020-21", lambda y: y is not None and 2020 <= y <= 2021),
+            ("2022-23", lambda y: y is not None and 2022 <= y <= 2023),
+            ("2024+", lambda y: y is not None and y >= 2024)]
 
 
 def _vintage(secname: str) -> int | None:

@@ -7,7 +7,7 @@ cd "/Users/koushik/Programming/Pycharm Projects/Finance/ABS-EE" || exit 1
 source .venv/bin/activate 2>/dev/null
 
 echo "[$(date '+%F %T')] ===== STAGE 1: download panel ====="
-python fetch_subprime.py --panel
+python fetch_subprime.py --panel --per-shelf 6
 echo "[$(date '+%F %T')] download stage exit=$?"
 
 echo "[$(date '+%F %T')] ===== STAGE 2: incremental build + load + chart ====="
