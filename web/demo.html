@@ -62,20 +62,18 @@
   <div class="chart-card"><h2>Index level &amp; each trader's equity</h2><div class="chart-box"><canvas id="cTrade"></canvas></div></div>
 
   <h2 class="section-title">Part 2 — How a subprime-auto lender hedges</h2>
-  <p class="note">A lender holds a pool of subprime auto loans (long credit — it loses value as delinquencies rise). It hedges by going <b>long the index</b>, sized to its credit sensitivity. Portfolio mark is an illustrative model off the index, not a market quote.</p>
+  <p class="note">A lender holds a pool of subprime auto loans and bleeds value as the pool's <b>actual net losses</b> accrue — charge-offs net of recoveries, straight from the loan tapes (no model). It hedges by going <b>long the index</b>. This shows how the index offsets <i>realized</i> credit losses, which is the economic case for the product.</p>
   <div class="tool"><div class="form-grid">
     <div><label class="fld">Pool value (USD)</label><input type="number" id="pool" value="10000000" step="1000000"></div>
-    <div><label class="fld">Credit sensitivity β</label><input type="number" id="beta" value="0.4" step="0.05" min="0" max="2">
-      <span class="sub">portfolio loses β× the index's % move</span></div>
-    <div><label class="fld">Hedge ratio</label><input type="number" id="hr" value="100" step="10" min="0" max="150"><span class="sub">% of full hedge</span></div>
+    <div><label class="fld">Hedge notional</label><input type="number" id="hr" value="40" step="5" min="0" max="150"><span class="sub">% of pool, long the index</span></div>
   </div></div>
   <div class="kpis">
     <div class="kpi"><div class="l">Portfolio — unhedged</div><div class="v" id="pUn">—</div></div>
-    <div class="kpi"><div class="l">Hedge PnL (long index)</div><div class="v" id="pHedge">—</div></div>
+    <div class="kpi"><div class="l">Realized credit loss</div><div class="v" id="pSaved">—</div></div>
+    <div class="kpi"><div class="l">Hedge gain (long index)</div><div class="v" id="pHedge">—</div></div>
     <div class="kpi"><div class="l">Portfolio — hedged</div><div class="v" id="pNet">—</div></div>
-    <div class="kpi"><div class="l">Drawdown avoided</div><div class="v" id="pSaved">—</div></div>
   </div>
-  <div class="chart-card"><h2>Unhedged vs hedged portfolio value</h2><div class="chart-box"><canvas id="cHedge"></canvas></div></div>
+  <div class="chart-card"><h2>Portfolio value: unhedged vs hedged (driven by real pool losses)</h2><div class="chart-box"><canvas id="cHedge"></canvas></div></div>
 
   <div class="methodology" id="results" style="display:none"></div>
   <a class="backlink" href="backtest.html">← Full backtest tool</a>

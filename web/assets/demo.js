@@ -21,14 +21,14 @@ fetch("data/auto-subprime.json").then(r => r.json()).then(d => {
 function compute() {
   const field = $("series").value, entry = $("entry").value, exit = $("exit").value;
   const notional = +$("notional").value, lev = +$("lev").value;
-  const V0 = +$("pool").value, beta = +$("beta").value, hr = +$("hr").value / 100;
+  const V0 = +$("pool").value, hr = +$("hr").value / 100;
   const pts = SERIES.filter(s => s.date.slice(0,7) >= entry && s.date.slice(0,7) <= exit && s[field] != null)
-                    .map(s => ({ym: s.date.slice(0,7), p: s[field]}));
+                    .map(s => ({ym: s.date.slice(0,7), p: s[field], nl: s.net_loss}));
   if (pts.length < 2) return null;
   const P0 = pts[0].p, im = notional / lev, maint = notional * 0.10;
-  const hedgeNotional = hr * beta * V0;
-  // Maintenance model: each side tops up to initial margin when equity < maintenance.
-  let eqL = im, eqS = im, cumTopL = 0, cumTopS = 0, callsL = 0, callsS = 0, firstCallL = null, firstCallS = null, prev = P0;
+  const hedgeNotional = hr * V0;          // long index notional
+  // Maintenance model (Part 1) + real-loss hedge (Part 2).
+  let eqL = im, eqS = im, cumTopL = 0, cumTopS = 0, callsL = 0, callsS = 0, firstCallL = null, firstCallS = null, prev = P0, cumLoss = 0;
   const rows = pts.map((pt, i) => {
     const ret = (pt.p - P0) / P0;
     const mtm = i === 0 ? 0 : notional * (pt.p - prev) / P0; prev = pt.p;
@@ -36,9 +36,12 @@ function compute() {
     let topL = 0, topS = 0;
     if (i > 0 && eqL < maint) { topL = im - eqL; eqL = im; cumTopL += topL; callsL++; if (!firstCallL) firstCallL = pt.ym; }
     if (i > 0 && eqS < maint) { topS = im - eqS; eqS = im; cumTopS += topS; callsS++; if (!firstCallS) firstCallS = pt.ym; }
-    const unhedged = V0 * (1 - beta * ret), hedge = hedgeNotional * ret;
+    // Part 2: portfolio bleeds the pool's ACTUAL realized net loss each month.
+    if (i > 0) cumLoss += V0 * ((pt.nl || 0) / 12 / 100);   // net_loss is annualized %
+    const hedge = hedgeNotional * ret;
     return {ym: pt.ym, p: pt.p, ret, lPnl: notional * ret, sPnl: -notional * ret,
-            lEq: eqL, sEq: eqS, topL, topS, cumTopL, cumTopS, unhedged, hedge, net: unhedged + hedge};
+            lEq: eqL, sEq: eqS, topL, topS, cumTopL, cumTopS,
+            cumLoss, hedge, unhedged: V0 - cumLoss, net: V0 - cumLoss + hedge};
   });
   return {rows, im, maint, notional, V0, callsL, callsS, firstCallL, firstCallS, field, lev};
 }
@@ -69,9 +72,9 @@ function step(i) {
   setTrader("s", r.sPnl, r.sEq, r.topS, r.cumTopS);
   // hedge
   $("pUn").textContent = fmtM(r.unhedged);
+  $("pSaved").innerHTML = `<span class="neg">${fmtM(r.cumLoss)}</span>`;
   $("pHedge").innerHTML = `<span class="${cl(r.hedge)}">${fmtM(r.hedge)}</span>`;
   $("pNet").textContent = fmtM(r.net);
-  $("pSaved").innerHTML = `<span class="pos">${fmtM(r.net - r.unhedged)}</span>`;
   // advance charts
   const sl = (a) => MODEL.rows.slice(0, i + 1).map(a);
   tradeChart.data.labels = sl(x => mlabel(x.ym));
@@ -84,7 +87,6 @@ function step(i) {
   hedgeChart.data.labels = sl(x => mlabel(x.ym));
   hedgeChart.data.datasets[0].data = sl(x => x.unhedged);
   hedgeChart.data.datasets[1].data = sl(x => x.net);
-  hedgeChart.data.datasets[2].data = sl(x => x.hedge);
   hedgeChart.update("none");
 }
 
@@ -108,8 +110,8 @@ function buildCharts(rows) {
     ds("Initial margin", C.blue, "y", [6,4]), ds("Maintenance margin (call below)", C.amber, "y", [3,3])]},
     options: opts("Account equity ($)", {y1:{position:"right",title:{display:true,text:"Index"},grid:{drawOnChartArea:false}}})});
   hedgeChart = new Chart($("cHedge"), {type:"line", data:{labels:[], datasets:[
-    ds("Portfolio — unhedged", C.accent), ds("Portfolio — hedged", C.green), ds("Hedge PnL", C.blue, "y", [5,4])]},
-    options: opts("Value ($)", {})});
+    ds("Portfolio value — unhedged", C.accent), ds("Portfolio value — hedged", C.green)]},
+    options: opts("Portfolio value ($)", {})});
 }
 
 function finish() {
@@ -121,13 +123,12 @@ function finish() {
       : " — no margin calls";
     return `<br>· <b style="color:${color}">${name}</b>: PnL ${fmt$(pnl)}, ${roc}${calltxt}.`;
   };
-  const minUn = Math.min(...rows.map(x => x.unhedged)), minNet = Math.min(...rows.map(x => x.net));
-  const avoided = (MODEL.V0 - minUn) - (MODEL.V0 - minNet);
+  const loss = r.cumLoss, gain = r.hedge, offset = loss > 0 ? gain / loss * 100 : 0;
   $("results").style.display = "";
   $("results").innerHTML = `<b>Result over ${rows.length - 1} months.</b> Index moved <b>${(r.ret * 100).toFixed(0)}%</b> (${MODEL.field}).
     ${line("Long Larry", "#22c55e", r.lPnl, MODEL.callsL, r.cumTopL, MODEL.firstCallL)}
     ${line("Short Sarah", "#e23b4e", r.sPnl, MODEL.callsS, r.cumTopS, MODEL.firstCallS)}
-    <br>· <b>Hedger</b>: unhedged portfolio ${fmtM(rows[0].unhedged)} → <b>${fmtM(r.unhedged)}</b>; hedged ended at <b>${fmtM(r.net)}</b>. The long-index hedge offset <b style="color:#22c55e">${fmtM(avoided)}</b> of drawdown.`;
+    <br>· <b>Hedger</b>: the ${fmtM(MODEL.V0)} pool realized <b style="color:#e23b4e">${fmtM(loss)}</b> of actual net credit losses; the long-index hedge gained <b style="color:#22c55e">${fmtM(gain)}</b>, offsetting <b>${offset.toFixed(0)}%</b>. Unhedged value fell to ${fmtM(r.unhedged)}; hedged it held at <b>${fmtM(r.net)}</b>.`;
   $("status").textContent = "Done. Adjust inputs and run again.";
 }
 
