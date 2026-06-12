@@ -23,6 +23,51 @@
     <a href="trade.html"><button class="ghost">Trade on testnet</button></a>
   </div>
 
+  <div class="about">
+    <p class="lead">A monthly, loan-level measure of how subprime auto borrowers are
+      actually paying — built straight from the securitization tapes, not survey data —
+      and published on-chain so it can be traded.</p>
+    <dl>
+      <dt>What's in it</dt>
+      <dd>Loan-level <b>SEC ABS-EE</b> filings from subprime auto securitizations: deals
+        whose balance-weighted issuance FICO is <b>below 640</b> and whose original pool
+        topped <b>$200M</b>. Constituents are drawn from staggered <b>2017–2024+</b> vintages
+        across the major subprime shelves (Santander Drive, Exeter, AmeriCredit, Bridgecrest,
+        Carvana), so calendar coverage stays continuous as deals season and roll off — the live
+        pool runs up to <b>~12 deals</b> at a time, with history back to <b>December 2016</b>.</dd>
+
+      <dt>Handling seasoning</dt>
+      <dd>Subprime losses follow a hump as a deal ages, which would otherwise dominate the
+        signal. We address it two ways. First, the index <b>pools loans across many deals of
+        staggered vintages and balance-weights them</b>, so the blended pool age stays roughly
+        flat and the level reflects credit, not the loss curve of any one deal. Second, a deal
+        <b>exits the pool once its balance falls below 10% of issuance</b>, dropping the
+        surviving-bad-loan tail of a nearly paid-down deal.</dd>
+
+      <dt>How it's calculated</dt>
+      <dd>Each month we recompute five balance-weighted credit metrics over the pooled loan
+        universe — <b>30+ and 60+ day delinquency, Current→30+ roll rate, annualized net loss,
+        and recovery rate</b>. The headline <b>stress index</b> converts each to a rolling-24-month
+        z-score (oriented so <b>higher = worse</b>) and blends them into one composite that sits near
+        0 in normal periods and spikes when credit deteriorates. <b>Rebuilt monthly</b> as new ABS-EE
+        filings post; the COVID accommodation window (Apr–Dec 2020) is flagged but kept in the series.</dd>
+
+      <dt>On-chain margining</dt>
+      <dd>The index is published on-chain through an oracle, and a margined contract lets you take a
+        cash-settled, total-return position on it: <b>PnL = ±notional × (price − entry) ÷ entry</b>, so a
+        long gains when the index rises (credit worsens) and a short mirrors it. Positions are
+        collateralized in a stablecoin (testnet MockUSDC today, designed to flip to USDC). Opening
+        requires <b>20% initial margin</b> (up to 5× leverage); if account equity falls below the
+        <b>10% maintenance margin</b>, anyone can liquidate the position for a 0.5% reward. This is
+        currently a <b>testnet proof-of-concept</b> — unaudited, not for real funds.</dd>
+
+      <dt>Validation</dt>
+      <dd>Built only from public SEC ABS-EE filings and cross-checked against NY Fed subprime and
+        auto-credit series (below) and rating-agency loss benchmarks. It's a quantitative research
+        signal, not investment advice.</dd>
+    </dl>
+  </div>
+
   <div class="kpis" id="kpis"></div>
 
   <div class="chart-card">

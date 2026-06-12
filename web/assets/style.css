@@ -50,6 +50,14 @@ a.card:hover{border-color:#33414f;transform:translateY(-2px)}
 .chart-box{position:relative;height:340px}
 .methodology{background:var(--panel2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;color:var(--muted);font-size:14px;margin:22px 0}
 .methodology b{color:var(--ink)}
+.about{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;margin:18px 0 6px}
+.about>p{color:var(--muted);font-size:14.5px;margin:0 0 14px;max-width:880px}
+.about .lead{color:var(--ink);font-size:15px;margin-bottom:16px}
+.about dl{display:grid;grid-template-columns:170px 1fr;gap:6px 22px;margin:0}
+.about dt{color:var(--ink);font-weight:600;font-size:14px}
+.about dd{color:var(--muted);font-size:14px;margin:0 0 8px}
+.about dd b{color:var(--ink);font-weight:600}
+@media(max-width:640px){.about dl{grid-template-columns:1fr;gap:2px}.about dt{margin-top:10px}}
 footer.site{border-top:1px solid var(--border);margin-top:50px;padding:26px 0;color:var(--muted);font-size:13px}
 footer.site .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .disclaimer{font-size:12px;color:#5b6675;margin-top:8px;max-width:760px}
