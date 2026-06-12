@@ -39,7 +39,8 @@ a.card:hover{border-color:#33414f;transform:translateY(-2px)}
 .phead{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;padding:40px 0 8px}
 .phead h1{font-size:32px;margin:0}
 .phead .asof{color:var(--muted);font-size:14px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:22px 0 8px}
+.kpi-head{font-size:16px;margin:26px 0 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:14px 0 8px}
 .kpi{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px}
 .kpi .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
 .kpi .v{font-size:26px;font-weight:700;margin-top:6px;font-family:var(--mono)}
