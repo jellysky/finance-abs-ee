@@ -66,6 +66,33 @@
         auto-credit series (below) and rating-agency loss benchmarks. It's a quantitative research
         signal, not investment advice.</dd>
     </dl>
+
+    <div class="example">
+      <div class="ex-title">Worked example — one monthly mark</div>
+      <p class="ex-note">Illustrative figures, following 30+ day delinquency through the three steps.</p>
+      <ol>
+        <li><b>Pool the metric across the live deals.</b> Sum each deal's 30+ DPD balance and its
+          active balance, then divide the totals — large deals carry proportionally more weight.
+          <table class="dt ex-table"><thead><tr><th>Deal</th><th>Active balance</th><th>30+ DPD balance</th></tr></thead>
+            <tbody>
+              <tr><td>Santander 2023-A</td><td>$300M</td><td>$54M</td></tr>
+              <tr><td>Exeter 2022-3</td><td>$500M</td><td>$95M</td></tr>
+              <tr><td>AmeriCredit 2024-1</td><td>$200M</td><td>$46M</td></tr>
+              <tr><td><b>Pool</b></td><td><b>$1,000M</b></td><td><b>$195M</b></td></tr>
+            </tbody></table>
+          Pooled 30+ DPD = $195M ÷ $1,000M = <b>19.5%</b>. (The same pooling runs for 60+ DPD,
+          Current→30+ roll, annualized net loss, and recovery rate.)</li>
+        <li><b>Convert to a stress z-score.</b> Compare that 19.5% to its own trailing-24-month
+          mean and spread. If 30+ DPD has averaged 17.0% with a 2.0% standard deviation:
+          z = (19.5 − 17.0) ÷ 2.0 = <b>+1.25σ</b> (clamped at ±3). Higher delinquency is worse, so
+          the sign stays positive; recovery is flipped, so a <i>drop</i> in recoveries also pushes stress up.</li>
+        <li><b>Blend into the headline mark.</b> Weight the five component z-scores by inverse
+          volatility (so a noisy metric can't dominate) and sum. With z-scores of, say,
+          +1.25 / +0.90 / +0.40 / +0.70 / +0.60, the composite lands near <b>+0.8σ</b> — modestly
+          elevated that month. A reading near 0 is normal; sustained positive means subprime
+          credit is deteriorating.</li>
+      </ol>
+    </div>
   </div>
 
   <h2 class="kpi-head">Most Recent Index Characteristics</h2>
