@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {AggregatorV3Interface} from "./AggregatorV3Interface.sol";
+
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
-
-interface IOracle {
-    function price() external view returns (uint256);
 }
 
 /// @title MarginedIndex — a margined, cash-settled position on a Serention index.
@@ -20,7 +18,7 @@ interface IOracle {
 ///         Do not use with real funds.
 contract MarginedIndex {
     IERC20  public immutable collateralToken;   // e.g. USDC (6 decimals)
-    IOracle public immutable oracle;            // index price feed (level * 1e8)
+    AggregatorV3Interface public immutable oracle;  // index feed (level * 1e8, 8 decimals)
     uint256 public immutable initialMarginBps;  // 2000 = 20%  -> 5x max leverage
     uint256 public immutable maintenanceBps;    // 1000 = 10%
     uint256 public constant LIQ_REWARD_BPS = 50; // 0.5% of notional to liquidator
@@ -39,7 +37,7 @@ contract MarginedIndex {
     constructor(address _collateral, address _oracle, uint256 _imBps, uint256 _maintBps) {
         require(_maintBps < _imBps, "maint<im");
         collateralToken = IERC20(_collateral);
-        oracle = IOracle(_oracle);
+        oracle = AggregatorV3Interface(_oracle);
         initialMarginBps = _imBps;
         maintenanceBps = _maintBps;
     }
@@ -65,15 +63,14 @@ contract MarginedIndex {
         require(notional > 0, "notional");
         uint256 im = notional * initialMarginBps / 10_000;
         require(collateral[msg.sender] >= im, "margin");
-        uint256 p = oracle.price();
-        require(p > 0, "price");
+        uint256 p = _price();
         positions[msg.sender] = Position(notional, p, isLong, true);
         emit Opened(msg.sender, isLong, notional, p);
     }
 
     function close() external {
         require(positions[msg.sender].open, "no position");
-        int256 pnl = _settle(msg.sender, oracle.price());
+        int256 pnl = _settle(msg.sender, _price());
         emit Closed(msg.sender, pnl, collateral[msg.sender]);
     }
 
@@ -82,7 +79,7 @@ contract MarginedIndex {
     function liquidate(address user) external {
         Position memory pos = positions[user];
         require(pos.open, "no position");
-        uint256 p = oracle.price();
+        uint256 p = _price();
         int256 equity = int256(collateral[user]) + _pnl(pos, p);
         uint256 maint = pos.notional * maintenanceBps / 10_000;
         require(equity < int256(maint), "healthy");
@@ -109,11 +106,19 @@ contract MarginedIndex {
         return pos.isLong ? pnl : -pnl;
     }
 
+    /// @dev Latest index level from the AggregatorV3 feed (8 decimals). Reverts on a
+    ///      non-positive answer (the affine level convention keeps it > 0).
+    function _price() internal view returns (uint256) {
+        (, int256 answer,,,) = oracle.latestRoundData();
+        require(answer > 0, "price");
+        return uint256(answer);
+    }
+
     // --- views (for the UI) ----------------------------------------------
     function pnlOf(address user) public view returns (int256) {
         Position memory pos = positions[user];
         if (!pos.open) return 0;
-        return _pnl(pos, oracle.price());
+        return _pnl(pos, _price());
     }
 
     function equityOf(address user) public view returns (int256) {
