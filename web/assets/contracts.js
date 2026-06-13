@@ -3,12 +3,14 @@
 window.SERENTION = {
   chainIdHex: "0xaa36a7",            // Sepolia (11155111)
   chainName: "Sepolia",
+  readRpc: "https://ethereum-sepolia-rpc.publicnode.com",  // reliable RPC for reads (not wallet-dependent)
   priceScale: 1e8,                   // oracle stores index level * 1e8
   usdcDecimals: 6,
   addresses: {
-    usdc: "0x99E8262680911BcBcF58179B3F5Cf44b0c923378",      // MockUSDC (Sepolia)
-    oracle: "0x4CEd12494384E1b343c4527CE06AE436263C9e26",    // IndexOracle (Sepolia)
-    margined: "0x8371482B4d068fC989d77C7D1e0f3bE78164b387"   // MarginedIndex (Sepolia)
+    usdc: "0x2A79d10E87ac92a185117ED2C0922d056421a06b",      // MockUSDC (Sepolia)
+    oracle: "0x99e3Eee494164F28781cDF8612bce410CaBA0826",    // SerentionIndexOracle, AggregatorV3 (Sepolia)
+    margined: "0x59Ef5b42A2E080Bfd317c0AE32b9e902e100F914",  // MarginedIndex (Sepolia)
+    feeder: "0x9f37Eb792b60E89465B7b545fe770c591646755b"     // SerentionFunctionsFeeder, Chainlink Functions (Sepolia)
   },
   abi: {
     usdc: [
@@ -18,8 +20,8 @@ window.SERENTION = {
       "function allowance(address,address) view returns (uint256)"
     ],
     oracle: [
-      "function price() view returns (uint256)",
-      "function updatedAt() view returns (uint256)",
+      "function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)",
+      "function decimals() view returns (uint8)",
       "function description() view returns (string)"
     ],
     margined: [
