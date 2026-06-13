@@ -8,8 +8,15 @@ const C = {accent:"#e23b4e", green:"#22c55e", blue:"#3b82f6", muted:"#8a97a8", a
 let SERIES = [];
 let mainChart, marginChart;
 
-fetch("data/auto-subprime.json").then(r => r.json()).then(d => {
+Promise.all([
+  fetch("data/auto-subprime.json").then(r => r.json()),
+  fetch("data/netyield.json").then(r => r.json()).catch(() => null),
+]).then(([d, ny]) => {
   SERIES = d.series;
+  if (ny && ny.series) {   // merge the net-yield index in by month
+    const m = new Map(ny.series.map(s => [s.date, s]));
+    SERIES.forEach(s => { const n = m.get(s.date); if (n) { s.net_yield = n.net_yield; s.net_yield_accrued = n.net_yield_accrued; } });
+  }
   const ds = SERIES.map(s => s.date.slice(0, 7));
   const e = document.getElementById("entry"), x = document.getElementById("exit");
   e.min = x.min = ds[0]; e.max = x.max = ds[ds.length - 1]; e.value = "2022-01"; x.value = ds[ds.length - 1];

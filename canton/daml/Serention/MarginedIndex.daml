@@ -1,0 +1,123 @@
+-- Serention margined index — clean self-contained Daml model (Canton LocalNet).
+--
+-- Mirrors the Sepolia/Solidity POC (MarginedIndex + SerentionIndexOracle + MockUSDC),
+-- but in Daml's privacy-by-default model: a position is visible ONLY to its trader
+-- and the operator (issuer/clearer), never to other traders. That privacy is the
+-- reason to be on Canton. PnL is the same total-return payoff:
+--
+--     pnl = ±notional * (level - entryLevel) / entryLevel
+--
+-- The published index `level` is the affine-rebased stress index (level = 100 + 25*stress),
+-- so it is strictly positive — same convention as the on-chain oracle and oracle_push.py.
+--
+-- STEP 1 (this file): self-contained templates so it compiles + unit-tests with `daml test`
+-- on an in-memory ledger, no external libraries. STEP 2: re-base the cash + settlement
+-- legs on Daml Finance (Holdings/Instruments/Settlement) for production-grade custody.
+
+module Serention.MarginedIndex where
+
+-- | Total-return PnL of a position at a given index level.
+pnlOf : Bool -> Decimal -> Decimal -> Decimal -> Decimal
+pnlOf isLong notional entryLevel level =
+  let raw = notional * (level - entryLevel) / entryLevel
+  in if isLong then raw else negate raw
+
+-- | Index level published on-ledger by the oracle party (the off-chain pusher submits
+--   `SetLevel`). Operator is an observer so it can reference the level at settlement.
+template IndexObservation
+  with
+    operator : Party
+    oracle : Party
+    observers : [Party]      -- market participants who may read the level (shared market data)
+    description : Text
+    level : Decimal
+    updatedAt : Time
+  where
+    signatory oracle
+    observer operator, observers
+    ensure level > 0.0
+
+    -- Publish a new level (new round). Controller is the oracle party.
+    choice SetLevel : ContractId IndexObservation
+      with
+        newLevel : Decimal
+        now : Time
+      controller oracle
+      do
+        assertMsg "level must be > 0" (newLevel > 0.0)
+        create this with level = newLevel, updatedAt = now
+
+-- | Tokenized collateral cash, issued by the operator (custodian) to an owner.
+--   Stands in for MockUSDC; step 2 replaces it with a Daml Finance cash holding.
+template Cash
+  with
+    operator : Party
+    owner : Party
+    amount : Decimal
+  where
+    signatory operator
+    observer owner
+    ensure amount >= 0.0
+
+    -- Post this cash as initial margin and open a position. The operator's authority
+    -- is inherited from Cash's signatory, so the trader (owner) can exercise alone.
+    choice OpenPosition : ContractId Position
+      with
+        isLong : Bool
+        notional : Decimal
+        oracleCid : ContractId IndexObservation
+        initialMarginRatio : Decimal
+        maintenanceRatio : Decimal
+      controller owner
+      do
+        assertMsg "collateral below initial margin"
+          (amount >= notional * initialMarginRatio)
+        obs <- fetch oracleCid
+        create Position with
+          operator
+          trader = owner
+          isLong
+          notional
+          entryLevel = obs.level
+          collateral = amount
+          maintenanceRatio
+
+-- | A margined, cash-settled position on the index. Private: only operator + trader.
+template Position
+  with
+    operator : Party
+    trader : Party
+    isLong : Bool
+    notional : Decimal
+    entryLevel : Decimal
+    collateral : Decimal
+    maintenanceRatio : Decimal
+  where
+    signatory operator, trader
+    ensure notional > 0.0 && collateral >= 0.0 && entryLevel > 0.0
+
+    -- Read-only equity (collateral + PnL) at a given level.
+    nonconsuming choice EquityAt : Decimal
+      with level : Decimal
+      controller trader
+      do pure (collateral + pnlOf isLong notional entryLevel level)
+
+    -- Trader closes; PnL settled, collateral ± PnL returned as Cash (bad debt floored at 0).
+    choice Close : ContractId Cash
+      with oracleCid : ContractId IndexObservation
+      controller trader
+      do
+        obs <- fetch oracleCid
+        let payout = max 0.0 (collateral + pnlOf isLong notional entryLevel obs.level)
+        create Cash with operator, owner = trader, amount = payout
+
+    -- Operator (or a delegated liquidator) closes a position whose equity has fallen
+    -- below maintenance margin.
+    choice Liquidate : ContractId Cash
+      with oracleCid : ContractId IndexObservation
+      controller operator
+      do
+        obs <- fetch oracleCid
+        let equity = collateral + pnlOf isLong notional entryLevel obs.level
+        assertMsg "position is healthy" (equity < notional * maintenanceRatio)
+        create Cash with operator, owner = trader, amount = max 0.0 equity

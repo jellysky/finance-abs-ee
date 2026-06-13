@@ -1,24 +1,20 @@
-"""Accrued net-yield series for the methods comparison page.
+"""Net-yield series for the methods comparison page — reads the persisted
+abs.loan_month_agg table (built by build_loan_month_agg.py), so it's instant and
+never re-scans the ~33M loan_months rows.
 
-Pools the index-universe (`in_index`) loan-months in Supabase by report month:
+Per index-universe month, annualized over average balance:
+  gross (cash)    = 12 * cash_interest / avg_bal          -- actual interest collected
+  gross (accrued) = accrued_interest_annl / avg_bal        -- coupon * balance (would-be)
+  net loss        = 12 * (chargeoff - recovery) / avg_bal
+  net yield       = gross - net loss   (both bases)
 
-  gross yield (annl) = sum(int_rate * beg_balance) / sum(avg_balance)   ~ WA coupon
-  net loss   (annl)  = 12 * sum(chargeoff - recovery) / sum(avg_balance)
-  net yield  (annl)  = gross yield - net loss
+Writes web/data/netyield.json with both bases so the chart can compare them.
 
-ACCRUED basis: interest is coupon * balance (what the pool *would* earn), not
-cash collected — so it reads a touch rosy in stress. This is the quick preview;
-the cash-interest version uses int_collected once the re-load populates it.
-
-Re-runnable: as `load_loans.py` brings more trusts online, just run this again
-to widen/refresh the series. Writes web/data/netyield.json.
-
-    ./.venv/bin/python web/build_netyield.py
+    python web/build_netyield.py
 """
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import psycopg
@@ -36,52 +32,42 @@ def _dsn() -> str:
     raise SystemExit("DATABASE_URL not found in .env")
 
 
-SQL = """
-select report_month,
-       count(distinct trust_id)                            as n_trusts,
-       sum(int_rate * beg_balance)                         as gross_num,
-       sum((coalesce(beg_balance,end_balance)
-            + coalesce(end_balance,beg_balance)) / 2.0)    as avg_bal,
-       sum(coalesce(chargeoff,0) - coalesce(recovery,0))   as net_loss_dollars
-from abs.loan_months
-where in_index and beg_balance is not null
-group by report_month
-order by report_month
-"""
-
-
 def main() -> int:
     with psycopg.connect(_dsn()) as c, c.cursor() as cur:
-        cur.execute("select count(distinct trust_id) from abs.loan_months where in_index")
-        n_loaded = cur.fetchone()[0]
-        cur.execute(SQL)
+        cur.execute(
+            "select report_month, n_trusts, cash_interest, accrued_interest_annl, "
+            "chargeoff, recovery, avg_bal from abs.loan_month_agg order by report_month"
+        )
         rows = cur.fetchall()
 
     series = []
-    for month, n_trusts, gross_num, avg_bal, net_loss in rows:
+    for month, n_trusts, cash_int, accr_int, chargeoff, recovery, avg_bal in rows:
         if not avg_bal:
             continue
-        gross = float(gross_num or 0) / float(avg_bal)
-        loss = 12.0 * float(net_loss or 0) / float(avg_bal)
+        avg_bal = float(avg_bal)
+        gross_cash = 12.0 * float(cash_int or 0) / avg_bal
+        gross_accr = float(accr_int or 0) / avg_bal
+        net_loss = 12.0 * (float(chargeoff or 0) - float(recovery or 0)) / avg_bal
         series.append({
             "date": month.strftime("%Y-%m-%d"),
-            "gross_yield": round(gross * 100, 3),
-            "net_loss": round(loss * 100, 3),
-            "net_yield": round((gross - loss) * 100, 3),
             "n_trusts": int(n_trusts),
+            "gross_cash": round(gross_cash * 100, 3),
+            "gross_accrued": round(gross_accr * 100, 3),
+            "net_loss": round(net_loss * 100, 3),
+            "net_yield": round((gross_cash - net_loss) * 100, 3),          # cash (primary)
+            "net_yield_accrued": round((gross_accr - net_loss) * 100, 3),
         })
 
     out = {
-        "basis": "accrued (coupon x balance)",
-        "trusts_loaded": int(n_loaded),
-        "trusts_total": 18,
+        "source": "abs.loan_month_agg (persisted marks)",
         "n_months": len(series),
         "series": series,
     }
     (ROOT / "web" / "data" / "netyield.json").write_text(json.dumps(out))
     cov = f"{series[0]['date']}..{series[-1]['date']}" if series else "none"
-    print(f"netyield.json: {len(series)} months ({cov}), "
-          f"{n_loaded}/18 trusts loaded so far")
+    last = series[-1] if series else {}
+    print(f"netyield.json: {len(series)} months ({cov}); "
+          f"latest cash net yield {last.get('net_yield')}%, accrued {last.get('net_yield_accrued')}%")
     return 0
 
 

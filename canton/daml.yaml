@@ -1,0 +1,9 @@
+sdk-version: 2.10.4
+name: serention-margined-index
+version: 0.1.0
+source: daml
+parties: []
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script

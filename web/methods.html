@@ -21,11 +21,11 @@
     Two ways to collapse the five z-scored credit components into one headline mark.
     <b style="color:var(--ink)">z-score average</b> is the current published method (inverse-vol-weighted, fully causal);
     <b style="color:var(--ink)">PCA</b> projects onto the first principal component (data-driven weights, scale-matched
-    to the average, not causal). The violet <b style="color:var(--ink)">net yield</b> line (right axis, %/yr) is a
-    different kind of index entirely — an economic <i>(coupon − losses)/balance</i> carry, no z-scoring needed.
-    ⚠️ <b style="color:var(--ink)">Preview:</b> accrued basis (coupon × balance, not cash collected) and computed over
-    only the trusts re-loaded so far — gross yield is biased low until the higher-rate subprime deals come online.
-    Internal comparison — not on the live product page.</p>
+    to the average, not causal). The right axis (%/yr) shows the economic <b style="color:var(--ink)">net yield</b> —
+    <i>(interest − losses)/balance</i>, no z-scoring needed — in two flavors: <b style="color:var(--ink)">cash</b> (violet,
+    actual interest <i>collected</i> from the tapes — the tradeable "price" series) and <b style="color:var(--ink)">accrued</b>
+    (green dashed, coupon × balance, what the pool <i>would</i> earn if everyone paid). Full 18-trust history; marks
+    persisted in <code>abs.loan_month_agg</code>. Internal comparison — not on the live product page.</p>
 
   <div class="kpis" id="kpis"></div>
 
@@ -51,7 +51,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <script>
-const C={accent:"#e23b4e",blue:"#3b82f6",amber:"#f59e0b",muted:"#8a97a8",ny:"#b07bff"};
+const C={accent:"#e23b4e",blue:"#3b82f6",amber:"#f59e0b",muted:"#8a97a8",ny:"#b07bff",ny2:"#22c55e"};
 Chart.defaults.color="#8a97a8";Chart.defaults.borderColor="#1f2733";
 const fmtMonth=s=>{const[y,m]=s.split("-");return["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m]+" "+y;};
 
@@ -66,12 +66,13 @@ function render(d, ny){
   document.getElementById("asof").textContent=`as of ${fmtMonth(d.as_of)} · ${d.n} scored months`;
   const labels=d.series.map(s=>s.date);
   const zavg=d.series.map(s=>s.zavg), pca=d.series.map(s=>s.pca);
-  // accrued net yield (right axis, %/yr), aligned to the stress labels by month
-  let nyVals=null, nyLoaded=0;
+  // net yield (right axis, %/yr): cash (actual interest collected) + accrued, by month
+  let nyCash=null, nyAccr=null;
   if(ny && ny.series){
-    const m=new Map(ny.series.map(s=>[s.date,s.net_yield]));
-    nyVals=labels.map(l=>m.has(l)?m.get(l):null);
-    nyLoaded=ny.trusts_loaded;
+    const mc=new Map(ny.series.map(s=>[s.date,s.net_yield]));
+    const ma=new Map(ny.series.map(s=>[s.date,s.net_yield_accrued]));
+    nyCash=labels.map(l=>mc.has(l)?mc.get(l):null);
+    nyAccr=labels.map(l=>ma.has(l)?ma.get(l):null);
   }
   const diff=d.series.map(s=>(s.zavg==null||s.pca==null)?null:+(s.pca-s.zavg).toFixed(4));
   const maxAbs=Math.max(...diff.filter(x=>x!=null).map(Math.abs));
@@ -82,8 +83,8 @@ function render(d, ny){
     ["Latest — average",last(zavg)?.toFixed(2)+"σ"],
     ["Latest — PCA",last(pca)?.toFixed(2)+"σ"],
   ];
-  if(nyVals) kpis.push(["Net yield (accrued)",(last(nyVals)?.toFixed(1)??"—")+"%/yr"],
-                       ["Trusts loaded",nyLoaded+"/18"]);
+  if(nyCash) kpis.push(["Net yield — cash",(last(nyCash)?.toFixed(1)??"—")+"%/yr"],
+                       ["Net yield — accrued",(last(nyAccr)?.toFixed(1)??"—")+"%/yr"]);
   document.getElementById("kpis").innerHTML=kpis.map(([l,v])=>
     `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
 
@@ -91,13 +92,16 @@ function render(d, ny){
   const zero={type:"line",yMin:0,yMax:0,borderColor:"#3a4554",borderWidth:1,borderDash:[4,4]};
 
   const sds=[
-    ds("z-score average (current)",zavg,C.accent,{}),
-    ds("PCA — PC1 (scale-matched)",pca,C.blue,{dash:[6,4]}),
+    ds("z-score average",zavg,C.accent,{dash:[2,3]}),
+    ds("PCA — PC1",pca,C.blue,{dash:[2,3]}),
   ];
-  if(nyVals) sds.push(ds(`net yield — accrued, %/yr (${nyLoaded}/18 trusts)`,nyVals,C.ny,{axis:"y1",width:3}));
+  if(nyCash){
+    sds.push(ds("net yield — cash, %/yr (price)",nyCash,C.ny,{axis:"y1",width:3}));   // SOLID = the chosen index
+    sds.push(ds("net yield — accrued, %/yr",nyAccr,C.ny2,{axis:"y1",dash:[2,3]}));
+  }
   new Chart(document.getElementById("cStress"),{type:"line",
     data:{labels,datasets:sds},
-    options:opts("stress (σ)",{covid,zero}, nyVals?"net yield (%/yr)":null)});
+    options:opts("stress (σ)",{covid,zero}, nyCash?"net yield (%/yr)":null)});
 
   new Chart(document.getElementById("cDiff"),{type:"line",
     data:{labels,datasets:[ds("PCA − average",diff,C.amber,{fill:true,fillc:"rgba(245,158,11,.12)"})]},

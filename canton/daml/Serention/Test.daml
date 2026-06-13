@@ -1,0 +1,89 @@
+-- Daml Script tests for the Serention margined index. Run: `daml test` (in-memory
+-- ledger, no Canton/Docker needed). Mirrors the Foundry tests on the Solidity side.
+
+module Serention.Test where
+
+import Daml.Script
+import DA.Assert ((===))
+import Serention.MarginedIndex
+
+data Setup = Setup with
+  operator : Party
+  trader : Party
+  other : Party
+  oracle : Party
+
+setup : Script Setup
+setup = do
+  operator <- allocateParty "Serention-Operator"
+  trader <- allocateParty "Trader-Alice"
+  other <- allocateParty "Trader-Bob"
+  oracle <- allocateParty "Index-Oracle"
+  pure Setup with ..
+
+-- Oracle publishes the seed level (96.80 ~ stress -0.128 affine-rebased).
+publishOracle : Setup -> Decimal -> Script (ContractId IndexObservation)
+publishOracle s level = do
+  now <- getTime
+  submit s.oracle do
+    createCmd IndexObservation with
+      operator = s.operator, oracle = s.oracle
+      observers = [s.trader, s.other]    -- shared market data
+      description = "Serention Auto Subprime stress (100+25*sigma)"
+      level, updatedAt = now
+
+setLevel : Setup -> ContractId IndexObservation -> Decimal -> Script (ContractId IndexObservation)
+setLevel s obs newLevel = do
+  now <- getTime
+  submit s.oracle do exerciseCmd obs SetLevel with newLevel, now
+
+openLong : Setup -> ContractId IndexObservation -> Bool -> Script (ContractId Position)
+openLong s obs isLong = do
+  cash <- submit s.operator do
+    createCmd Cash with operator = s.operator, owner = s.trader, amount = 20_000.0
+  submit s.trader do
+    exerciseCmd cash OpenPosition with
+      isLong, notional = 100_000.0, oracleCid = obs
+      initialMarginRatio = 0.20, maintenanceRatio = 0.10
+
+-- A long position that profits when the index rises (credit deteriorates).
+testLongProfit : Script ()
+testLongProfit = do
+  s <- setup
+  obs <- publishOracle s 100.0
+  pos <- openLong s obs True
+  obs2 <- setLevel s obs 125.0          -- +25%: pnl = 100k*(125-100)/100 = 25k
+  payoutCid <- submit s.trader do exerciseCmd pos Close with oracleCid = obs2
+  payout <- queryContractId s.operator payoutCid
+  ((.amount) <$> payout) === Some 45_000.0   -- 20k collateral + 25k pnl
+
+-- A short under water past maintenance gets liquidated by the operator.
+testLiquidation : Script ()
+testLiquidation = do
+  s <- setup
+  obs <- publishOracle s 100.0
+  pos <- openLong s obs False
+  obs2 <- setLevel s obs 118.0          -- short pnl -18k, equity 2k < maint 10k
+  payoutCid <- submit s.operator do exerciseCmd pos Liquidate with oracleCid = obs2
+  payout <- queryContractId s.operator payoutCid
+  ((.amount) <$> payout) === Some 2_000.0
+
+-- A healthy position cannot be liquidated.
+testHealthyCannotLiquidate : Script ()
+testHealthyCannotLiquidate = do
+  s <- setup
+  obs <- publishOracle s 100.0
+  pos <- openLong s obs False
+  obs2 <- setLevel s obs 105.0          -- short pnl -5k, equity 15k > maint 10k
+  submitMustFail s.operator do exerciseCmd pos Liquidate with oracleCid = obs2
+
+-- Privacy: a rival trader cannot see someone else's position.
+testPositionIsPrivate : Script ()
+testPositionIsPrivate = do
+  s <- setup
+  obs <- publishOracle s 100.0
+  pos <- openLong s obs True
+  bobPos <- query @Position s.other
+  bobPos === []                          -- Bob sees nothing
+  alicePos <- query @Position s.trader
+  map fst alicePos === [pos]             -- Alice sees her own
