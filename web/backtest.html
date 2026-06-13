@@ -5,7 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Serention — Backtest a trade</title>
 <link rel="stylesheet" href="assets/style.css">
-<style>.wrap{max-width:1380px} .chart-box{height:380px} table.dt th,table.dt td{padding:8px 14px}</style>
+<style>
+  .wrap{max-width:1380px} .chart-box{height:380px} table.dt th,table.dt td{padding:8px 14px}
+  /* keep all backtest inputs on a single row */
+  .form-grid{grid-template-columns:repeat(8,minmax(0,1fr));gap:9px;align-items:end}
+  .form-grid>div{min-width:0}
+  .form-grid label.fld{font-size:9.5px;letter-spacing:.2px;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .form-grid input,.form-grid select{font-size:12px;padding:7px 8px}
+  .form-grid .sub{display:none}
+  #run{width:100%;padding:8px 6px;font-size:13px}
+</style>
 </head>
 <body>
 <header class="site"><div class="wrap">
@@ -32,10 +41,10 @@
       <div><label class="fld">Entry month</label><input type="month" id="entry"></div>
       <div><label class="fld">Exit month</label><input type="month" id="exit"></div>
       <div><label class="fld">Notional (USDC)</label><input type="number" id="notional" value="100000" min="1" step="1000"></div>
-      <div><label class="fld">Initial margin %</label><input type="number" id="im" value="20" min="1" max="100" step="1"></div>
-      <div><label class="fld">Maintenance margin %</label><input type="number" id="mm" value="10" min="0" max="100" step="1"></div>
-      <div><label class="fld">Gas / round-trip (USD)</label><input type="number" id="gas" value="0" min="0" step="5"><span class="sub">0 on testnet; ~$40 mainnet est.</span></div>
-      <div><button id="run">Run backtest</button></div>
+      <div><label class="fld">Init. margin %</label><input type="number" id="im" value="20" min="1" max="100" step="1"></div>
+      <div><label class="fld">Maint. margin %</label><input type="number" id="mm" value="10" min="0" max="100" step="1"></div>
+      <div><label class="fld">Gas (USD)</label><input type="number" id="gas" value="0" min="0" step="5"><span class="sub">0 on testnet; ~$40 mainnet est.</span></div>
+      <div><button id="run">Run</button></div>
     </div>
     <div class="statusline" id="status"></div>
   </div>
