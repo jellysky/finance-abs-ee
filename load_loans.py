@@ -1,7 +1,7 @@
 """Load lean loan-level data into Supabase (Option B), disk-safe + resumable.
 
 For each qualifying subprime trust: download its monthly tape -> clean (dedup,
-date parse, rate-normalize; NO append_calc_fields) -> select ~16 lean columns ->
+date parse, rate-normalize; NO append_calc_fields) -> select ~22 lean columns ->
 COPY into abs.loan_months -> DELETE that deal's XMLs before the next deal.
 Peak local disk stays ~one tape (~7 GB).
 
@@ -38,7 +38,11 @@ NUM = ["originalLoanTerm", "remainingTermToMaturityNumber", "obligorCreditScore"
        "currentDelinquencyStatus", "reportingPeriodBeginningLoanBalanceAmount",
        "reportingPeriodActualEndBalanceAmount", "originalLoanAmount",
        "chargedoffPrincipalAmount", "recoveredAmount",
-       "reportingPeriodInterestRatePercentage", "vehicleNewUsedCode"]
+       "reportingPeriodInterestRatePercentage", "vehicleNewUsedCode",
+       # Cash-flow fields (for net-yield / excess-spread / prepay analysis).
+       "actualInterestCollectedAmount", "actualPrincipalCollectedAmount",
+       "reportingPeriodScheduledPaymentAmount", "scheduledInterestAmount",
+       "scheduledPrincipalAmount", "servicingFeePercentage"]
 KEEP = set(NUM + ["assetNumber", "reportingPeriodBeginningDate",
                   "reportingPeriodEndingDate", "originationDate",
                   "obligorGeographicLocation"])
@@ -76,11 +80,20 @@ create table if not exists abs.loan_load_log (
   n_rows bigint,
   loaded_at timestamptz default now()
 );
+-- Cash-flow columns (added 2026-06; idempotent so the table migrates in place).
+alter table abs.loan_months add column if not exists int_collected real;
+alter table abs.loan_months add column if not exists prin_collected real;
+alter table abs.loan_months add column if not exists sched_payment real;
+alter table abs.loan_months add column if not exists sched_interest real;
+alter table abs.loan_months add column if not exists sched_principal real;
+alter table abs.loan_months add column if not exists servicing_fee_pct real;
 """
 
 COPY_COLS = ("trust_id, asset_number, report_month, orig_date, fico, dpd, "
              "orig_term, rem_term, beg_balance, end_balance, orig_balance, "
-             "chargeoff, recovery, int_rate, state, new_used, in_index")
+             "chargeoff, recovery, int_rate, state, new_used, "
+             "int_collected, prin_collected, sched_payment, sched_interest, "
+             "sched_principal, servicing_fee_pct, in_index")
 
 
 def _dsn() -> str:
@@ -126,6 +139,12 @@ def build_lean(cleaned: pd.DataFrame, trust_id: int, exited) -> pd.DataFrame:
         "int_rate": pd.to_numeric(col("reportingPeriodInterestRatePercentage"), errors="coerce"),
         "state": col("obligorGeographicLocation").astype("string"),
         "new_used": pd.to_numeric(col("vehicleNewUsedCode"), errors="coerce").round().astype("Int64"),
+        "int_collected": pd.to_numeric(col("actualInterestCollectedAmount"), errors="coerce"),
+        "prin_collected": pd.to_numeric(col("actualPrincipalCollectedAmount"), errors="coerce"),
+        "sched_payment": pd.to_numeric(col("reportingPeriodScheduledPaymentAmount"), errors="coerce"),
+        "sched_interest": pd.to_numeric(col("scheduledInterestAmount"), errors="coerce"),
+        "sched_principal": pd.to_numeric(col("scheduledPrincipalAmount"), errors="coerce"),
+        "servicing_fee_pct": pd.to_numeric(col("servicingFeePercentage"), errors="coerce"),
     })
     # in_index = a month the index actually uses (qualifying trust, before exit).
     if pd.notna(exited):

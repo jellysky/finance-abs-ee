@@ -146,6 +146,11 @@ def trust_month_metrics(dtPmts: pd.DataFrame) -> pd.DataFrame:
     out["recoveries"] = (grp["recoveredAmount"].sum()
                          if "recoveredAmount" in df.columns else np.nan)
 
+    # Interest revenue dollars (for the economic net-yield layer). Straight from
+    # the tape; summed across the pool, no standardization needed downstream.
+    out["interest_collected"] = (grp["actualInterestCollectedAmount"].sum()
+                                 if "actualInterestCollectedAmount" in df.columns else np.nan)
+
     # Roll rate components (their own observable denominator).
     roll = _roll_current_to_30(df)
     out = out.join(roll, how="left")

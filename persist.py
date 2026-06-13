@@ -28,14 +28,15 @@ ROOT = Path(__file__).resolve().parent
 _INDEX_COLS = [
     "month", "n_trusts", "pool_balance",
     "delq30plus", "delq60plus", "roll_c_to_30", "net_loss_annl", "recovery_rate",
+    "gross_yield_annl", "net_yield_annl",
     "z_delq30plus", "z_delq60plus", "z_roll_c_to_30", "z_net_loss_annl", "z_recovery_rate",
-    "stress_index", "covid_flag",
+    "stress_index", "stress_index_zavg", "stress_index_pca", "covid_flag",
 ]
 _TRUST_COLS = [
     "securitization_key", "month",
     "pool_beg_balance", "pool_end_balance", "active_balance",
     "delq30_balance", "delq60_balance", "current_balance", "roll_30_balance",
-    "net_losses", "charge_offs", "recoveries",
+    "net_losses", "charge_offs", "recoveries", "interest_collected",
     "delq30plus", "delq60plus", "roll_c_to_30", "net_loss_annl", "recovery_rate",
 ]
 _UNIVERSE_COLS = [

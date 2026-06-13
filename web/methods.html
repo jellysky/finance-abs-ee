@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serention — Stress index: averaging vs PCA</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><span class="dot"></span>SERENTION <small>Indices</small></a>
+  <nav><a href="index.html">Products</a><a href="product.html?slug=auto-subprime">Auto Subprime</a></nav>
+</div></header>
+
+<main class="wrap">
+  <div class="phead">
+    <h1>Stress index — averaging vs PCA</h1>
+    <span class="asof" id="asof"></span>
+  </div>
+  <p style="color:var(--muted);max-width:880px;margin:0 0 6px">
+    Two ways to collapse the five z-scored credit components into one headline mark.
+    <b style="color:var(--ink)">z-score average</b> is the current published method (inverse-vol-weighted, fully causal);
+    <b style="color:var(--ink)">PCA</b> projects onto the first principal component (data-driven weights, scale-matched
+    to the average, not causal). Internal comparison — not on the live product page.</p>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="chart-card">
+    <h2>Headline stress mark</h2>
+    <p class="sub">Both series, σ scale. Shaded band = COVID accommodation window; dotted line = 0 (normal).</p>
+    <div class="chart-box"><canvas id="cStress"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h2>Difference (PCA − average)</h2>
+    <p class="sub">Where the two disagree. PCA rides tighter to zero at the extremes because it down-weights the noisier roll-rate &amp; recovery components.</p>
+    <div class="chart-box" style="height:220px"><canvas id="cDiff"></canvas></div>
+  </div>
+
+  <a class="backlink" href="product.html?slug=auto-subprime">← Auto Subprime product page</a>
+</main>
+
+<footer class="site"><div class="wrap">
+  <div>© Serention</div><div>Data: SEC ABS-EE · NY Fed</div>
+</div></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script>
+const C={accent:"#e23b4e",blue:"#3b82f6",amber:"#f59e0b",muted:"#8a97a8"};
+Chart.defaults.color="#8a97a8";Chart.defaults.borderColor="#1f2733";
+const fmtMonth=s=>{const[y,m]=s.split("-");return["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m]+" "+y;};
+
+fetch("data/stress_methods.json").then(r=>r.json()).then(render).catch(e=>{
+  document.getElementById("asof").textContent="Could not load data/stress_methods.json ("+e+")";
+});
+
+function render(d){
+  document.getElementById("asof").textContent=`as of ${fmtMonth(d.as_of)} · ${d.n} scored months`;
+  const labels=d.series.map(s=>s.date);
+  const zavg=d.series.map(s=>s.zavg), pca=d.series.map(s=>s.pca);
+  const diff=d.series.map(s=>(s.zavg==null||s.pca==null)?null:+(s.pca-s.zavg).toFixed(4));
+  const maxAbs=Math.max(...diff.filter(x=>x!=null).map(Math.abs));
+
+  const kpis=[
+    ["Correlation",d.corr.toFixed(3)],
+    ["Max |difference|",maxAbs.toFixed(3)+"σ"],
+    ["Latest — average",last(zavg)?.toFixed(2)+"σ"],
+    ["Latest — PCA",last(pca)?.toFixed(2)+"σ"],
+  ];
+  document.getElementById("kpis").innerHTML=kpis.map(([l,v])=>
+    `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
+
+  const covid={type:"box",xMin:d.covid.start,xMax:d.covid.end,backgroundColor:"rgba(245,158,11,.10)",borderWidth:0};
+  const zero={type:"line",yMin:0,yMax:0,borderColor:"#3a4554",borderWidth:1,borderDash:[4,4]};
+
+  new Chart(document.getElementById("cStress"),{type:"line",
+    data:{labels,datasets:[
+      ds("z-score average (current)",zavg,C.accent,{}),
+      ds("PCA — PC1 (scale-matched)",pca,C.blue,{dash:[6,4]}),
+    ]},options:opts("stress (σ)",{covid,zero})});
+
+  new Chart(document.getElementById("cDiff"),{type:"line",
+    data:{labels,datasets:[ds("PCA − average",diff,C.amber,{fill:true,fillc:"rgba(245,158,11,.12)"})]},
+    options:opts("Δσ",{zero})});
+}
+function last(a){for(let i=a.length-1;i>=0;i--)if(a[i]!=null)return a[i];return null;}
+function ds(label,data,color,o){return{label,data,borderColor:color,backgroundColor:o.fillc||color,
+  borderWidth:2,pointRadius:0,tension:.25,spanGaps:true,fill:!!o.fill,borderDash:o.dash||[]};}
+function opts(yTitle,anno){return{responsive:true,maintainAspectRatio:false,
+  interaction:{mode:"index",intersect:false},
+  plugins:{legend:{labels:{boxWidth:12,usePointStyle:true,padding:14}},
+    annotation:{annotations:anno||{}},
+    tooltip:{callbacks:{title:i=>fmtMonth(i[0].label)}}},
+  scales:{x:{grid:{display:false},ticks:{maxTicksLimit:11,autoSkip:true,
+      callback:function(v){const s=this.getLabelForValue(v);return s?s.slice(0,4):s;}}},
+    y:{title:{display:true,text:yTitle},grid:{color:"#161d28"}}}};}
+</script>
+</body>
+</html>

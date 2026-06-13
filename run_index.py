@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(f"\n=== INDEX MARKS ({len(idx)} months) ===")
     cols = ["n_trusts", "delq30plus", "delq60plus", "roll_c_to_30",
-            "net_loss_annl", "recovery_rate", "stress_index", "covid_flag"]
+            "net_loss_annl", "recovery_rate", "stress_index", "stress_index_pca", "covid_flag"]
     shown = idx[[c for c in cols if c in idx.columns]].round(4)
     print((shown.iloc[::max(1, len(shown) // 30)] if len(shown) > 40 else shown).to_string())
 
