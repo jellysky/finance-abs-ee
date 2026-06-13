@@ -1,7 +1,7 @@
 // Render a Serention index page from data/<slug>.json
-const C = {accent:"#e23b4e", blue:"#3b82f6", amber:"#f59e0b", green:"#22c55e", muted:"#8a97a8"};
-Chart.defaults.color = "#8a97a8";
-Chart.defaults.borderColor = "#1f2733";
+const C = {accent:"#14b8c4", blue:"#3b82f6", amber:"#f59e0b", green:"#22c55e", muted:"#c9b8f2"};
+Chart.defaults.color = "#c9b8f2";
+Chart.defaults.borderColor = "rgba(201,184,242,0.18)";
 Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
 
 const slug = new URLSearchParams(location.search).get("slug") || "auto-subprime";
@@ -40,7 +40,7 @@ function render(d) {
   const covid = boxAnno(d.covid);
 
   line("cStress", labels,
-    [ds("Stress index", get("stress"), C.accent, {fill:true, fillc:"rgba(226,59,78,.10)"})],
+    [ds("Stress index", get("stress"), C.accent, {fill:true, fillc:"rgba(20,184,196,.10)"})],
     {yTitle:"σ", anno:{covid, zero:zeroLine()}});
 
   line("cPerf", labels, [
@@ -141,7 +141,7 @@ function baseOpts(cfg) {
   const scales = {
     x:{grid:{display:false}, ticks:{maxTicksLimit:11, autoSkip:true,
         callback:function(v){ const s=this.getLabelForValue(v); return s ? s.slice(0,4) : s; }}},
-    y:{title:{display:!!cfg.yTitle, text:cfg.yTitle||""}, grid:{color:"#161d28"}},
+    y:{title:{display:!!cfg.yTitle, text:cfg.yTitle||""}, grid:{color:"rgba(201,184,242,0.14)"}},
   };
   if (cfg.y1) scales.y1 = cfg.y1;
   return {responsive:true, maintainAspectRatio:false, interaction:{mode:"index", intersect:false},
@@ -158,7 +158,7 @@ function boxAnno(c) {
     label:{display:false}};
 }
 function zeroLine() {
-  return {type:"line", yMin:0, yMax:0, borderColor:"#3a4554", borderWidth:1, borderDash:[4,4]};
+  return {type:"line", yMin:0, yMax:0, borderColor:"rgba(255,255,255,0.35)", borderWidth:1, borderDash:[4,4]};
 }
 
 // align an array of {date,<key>} (or our series) to a master label list

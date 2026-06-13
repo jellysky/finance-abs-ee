@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="site"><div class="wrap">
-  <a class="brand" href="index.html"><span class="dot"></span>SERENTION <small>Indices</small></a>
+  <a class="brand" href="index.html"><img class="logo" src="assets/serention-logo.svg" alt="Serention"><small>Indices</small></a>
   <nav><a href="index.html">Products</a><a href="product.html?slug=auto-subprime">Auto Subprime</a></nav>
 </div></header>
 
@@ -51,8 +51,8 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <script>
-const C={accent:"#e23b4e",blue:"#3b82f6",amber:"#f59e0b",muted:"#8a97a8",ny:"#b07bff",ny2:"#22c55e"};
-Chart.defaults.color="#8a97a8";Chart.defaults.borderColor="#1f2733";
+const C={accent:"#14b8c4",blue:"#3b82f6",amber:"#f59e0b",muted:"#c9b8f2",ny:"#b07bff",ny2:"#22c55e"};
+Chart.defaults.color="#c9b8f2";Chart.defaults.borderColor="rgba(201,184,242,0.18)";
 const fmtMonth=s=>{const[y,m]=s.split("-");return["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m]+" "+y;};
 
 Promise.all([
@@ -89,7 +89,7 @@ function render(d, ny){
     `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
 
   const covid={type:"box",xMin:d.covid.start,xMax:d.covid.end,backgroundColor:"rgba(245,158,11,.10)",borderWidth:0};
-  const zero={type:"line",yMin:0,yMax:0,borderColor:"#3a4554",borderWidth:1,borderDash:[4,4]};
+  const zero={type:"line",yMin:0,yMax:0,borderColor:"rgba(255,255,255,0.35)",borderWidth:1,borderDash:[4,4]};
 
   const sds=[
     ds("z-score average",zavg,C.accent,{dash:[2,3]}),
@@ -113,7 +113,7 @@ function ds(label,data,color,o){return{label,data,borderColor:color,backgroundCo
   yAxisID:o.axis||"y"};}
 function opts(yTitle,anno,y1Title){const scales={x:{grid:{display:false},ticks:{maxTicksLimit:11,autoSkip:true,
       callback:function(v){const s=this.getLabelForValue(v);return s?s.slice(0,4):s;}}},
-    y:{title:{display:true,text:yTitle},grid:{color:"#161d28"}}};
+    y:{title:{display:true,text:yTitle},grid:{color:"rgba(201,184,242,0.14)"}}};
   if(y1Title) scales.y1={position:"right",title:{display:true,text:y1Title},grid:{drawOnChartArea:false}};
   return{responsive:true,maintainAspectRatio:false,
   interaction:{mode:"index",intersect:false},

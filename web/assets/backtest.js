@@ -2,8 +2,8 @@
 // Maintenance model: each side starts at initial margin; each month it's marked to
 // market, and if equity falls below maintenance the holder tops up to initial margin.
 // The top-up columns show the capital that must be injected to stay in (else liquidated).
-Chart.defaults.color = "#8a97a8"; Chart.defaults.borderColor = "#1f2733";
-const C = {accent:"#e23b4e", green:"#22c55e", blue:"#3b82f6", muted:"#8a97a8", amber:"#f59e0b"};
+Chart.defaults.color = "#c9b8f2"; Chart.defaults.borderColor = "rgba(201,184,242,0.18)";
+const C = {accent:"#14b8c4", green:"#22c55e", blue:"#3b82f6", muted:"#c9b8f2", amber:"#f59e0b"};
 
 let SERIES = [];
 let mainChart, marginChart;
@@ -107,7 +107,7 @@ function renderMetrics(o) {
   const shared = `Notional <b>${fmt$(o.notional)}</b> · initial margin <b>${fmt$(o.IM)}</b>
     (${(o.imPct*100)|0}% → ${(1/o.imPct).toFixed(1)}× leverage) · maintenance margin <b>${fmt$(o.MM)}</b> (${(o.mmPct*100)|0}%) ·
     gas <b>${fmt$(o.gas)}</b> · ${o.months} months · index ${o.field} <b>${o.P0.toFixed(1)} → ${o.Pn.toFixed(1)}</b>.
-    <br><span style="color:#8a97a8">When account equity (margin + PnL) falls below the maintenance margin, the holder must top up to the initial margin to stay in — that month's injection is the <b>Margin top-up</b>. If they don't, the position is liquidated at that point instead.</span>`;
+    <br><span style="color:#c9b8f2">When account equity (margin + PnL) falls below the maintenance margin, the holder must top up to the initial margin to stay in — that month's injection is the <b>Margin top-up</b>. If they don't, the position is liquidated at that point instead.</span>`;
   let n = document.getElementById("sharednote");
   if (!n) { n = document.createElement("div"); n.id = "sharednote"; n.className = "note"; document.getElementById("metrics").after(n); }
   n.innerHTML = shared;
@@ -137,7 +137,7 @@ function renderCharts(rows, IM) {
 function chartOpts(yTitle, extra) {
   return {responsive:true, maintainAspectRatio:false, interaction:{mode:"index",intersect:false},
     plugins:{legend:{labels:{boxWidth:12,usePointStyle:true,padding:12}}},
-    scales:{x:{grid:{display:false}, ticks:{maxTicksLimit:14, autoSkip:true}}, y:{title:{display:true,text:yTitle}, grid:{color:"#161d28"}}, ...extra}};
+    scales:{x:{grid:{display:false}, ticks:{maxTicksLimit:14, autoSkip:true}}, y:{title:{display:true,text:yTitle}, grid:{color:"rgba(201,184,242,0.14)"}}, ...extra}};
 }
 
 function renderTable(rows, MM) {
