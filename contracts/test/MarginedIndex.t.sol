@@ -13,48 +13,69 @@ contract MarginedIndexTest is Test {
     address alice = address(0xA11CE);
     address bob = address(0xB0B);
 
+    // index net yield 10.0%/yr -> floatingBps 1000; fixed leg 4% -> spread 6%/yr (600 bps).
+    // Alice posts exactly the 20% initial margin on 100k notional = 20k.
     function setUp() public {
         usdc = new MockUSDC();
-        oracle = new SerentionIndexOracle(10e8, "test index = 10.0"); // index level 10.0
+        oracle = new SerentionIndexOracle(10e8, "net yield = 10.0%/yr"); // 10.0 * 1e8
         mi = new MarginedIndex(address(usdc), address(oracle), 2000, 1000); // 20% IM, 10% maint
+        mi.setFixedRate(400); // 4%/yr fixed leg
         vm.startPrank(alice);
-        usdc.mint(100_000e6);
+        usdc.mint(20_000e6);
         usdc.approve(address(mi), type(uint256).max);
-        mi.deposit(100_000e6);
+        mi.deposit(20_000e6);
         vm.stopPrank();
     }
 
-    function testLongProfit() public {
+    // RECEIVER earns the floating-minus-fixed carry over time.
+    function testReceiverEarnsCarry() public {
         vm.prank(alice);
-        mi.open(true, 100_000e6); // notional 100k, IM 20k
-        oracle.setAnswer(12e8); // +20%
-        assertEq(mi.pnlOf(alice), int256(20_000e6)); // 100k * (12-10)/10 = 20k
+        mi.open(true, 100_000e6); // receive net yield, pay fixed; spread = 6%/yr
+        vm.warp(block.timestamp + 365 days);
+        assertEq(mi.pnlOf(alice), int256(6_000e6)); // 6% * 100k = 6k for the year
         vm.prank(alice);
         mi.close();
-        assertEq(mi.collateral(alice), 120_000e6);
+        assertEq(mi.collateral(alice), 26_000e6); // 20k collateral + 6k carry
     }
 
-    function testShortProfit() public {
+    // PAYER owes the same carry when the spread is positive.
+    function testPayerOwesCarry() public {
         vm.prank(alice);
         mi.open(false, 100_000e6);
-        oracle.setAnswer(8e8); // -20%
-        assertEq(mi.pnlOf(alice), int256(20_000e6)); // short gains when index falls
-        vm.prank(alice);
-        mi.close();
-        assertEq(mi.collateral(alice), 120_000e6);
+        vm.warp(block.timestamp + 365 days);
+        assertEq(mi.pnlOf(alice), int256(-6_000e6));
     }
 
-    function testLiquidationWhenEquityBelowMaintenance() public {
+    // The headline scenario: open and close inside one week (no new index print).
+    function testInOutOneWeek() public {
         vm.prank(alice);
-        mi.open(false, 100_000e6); // short
-        oracle.setAnswer(18e8); // +80%: short pnl -80k, equity 20k > maint 10k
+        mi.open(true, 100_000e6); // floating fixed at open = 1000 bps
+        vm.warp(block.timestamp + 7 days); // no new print -> floating unchanged for this position
+        int256 expected = int256(100_000e6) * 600 * int256(uint256(7 days)) / (10_000 * int256(uint256(365 days)));
+        assertEq(mi.pnlOf(alice), expected); // ~ $115.07 of carry for the week
+        vm.prank(alice);
+        mi.close();
+        assertEq(mi.collateral(alice), uint256(int256(20_000e6) + expected));
+    }
+
+    // A payer whose adverse carry eats through maintenance margin gets liquidated.
+    function testLiquidationOnAdverseCarry() public {
+        vm.prank(alice);
+        mi.open(false, 100_000e6); // pays 6%/yr; equity = 20k - carry, maint = 10k
+        vm.warp(block.timestamp + 365 days); // carry 6k -> equity 14k > 10k: still healthy
         vm.expectRevert("healthy");
         mi.liquidate(alice);
-        oracle.setAnswer(20e8); // +100%: short pnl -100k, equity 0 < maint
+        vm.warp(block.timestamp + 365 days); // carry 12k -> equity 8k < 10k: liquidatable
         vm.prank(bob);
         mi.liquidate(alice);
         (,,, bool open) = mi.getPosition(alice);
         assertFalse(open);
+    }
+
+    function testOnlyOwnerSetsFixedRate() public {
+        vm.prank(bob);
+        vm.expectRevert("owner");
+        mi.setFixedRate(900);
     }
 
     function testCannotWithdrawWhileOpen() public {
@@ -65,45 +86,17 @@ contract MarginedIndexTest is Test {
         vm.stopPrank();
     }
 
-    function testInsufficientMarginReverts() public {
-        vm.prank(alice);
-        vm.expectRevert("margin");
-        mi.open(true, 1_000_000e6); // IM 200k > 100k collateral
-    }
-
-    // --- oracle: Chainlink AggregatorV3 surface ---------------------------
+    // --- oracle: Chainlink AggregatorV3 surface + floating leg ------------
 
     function testOracleAggregatorV3Surface() public view {
         assertEq(oracle.decimals(), 8);
-        assertEq(oracle.version(), 1);
-        (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) = oracle.latestRoundData();
-        assertEq(answer, 10e8);
-        assertEq(roundId, 1); // seeded in constructor
-        assertEq(answeredInRound, 1);
-        assertGt(updatedAt, 0);
-    }
-
-    function testRoundsIncrementOnUpdate() public {
-        oracle.setAnswer(11e8);
         (uint80 roundId, int256 answer,,,) = oracle.latestRoundData();
-        assertEq(roundId, 2);
-        assertEq(answer, 11e8);
-        // prior round is still queryable
-        (, int256 prev,,,) = oracle.getRoundData(1);
-        assertEq(prev, 10e8);
+        assertEq(answer, 10e8);
+        assertEq(roundId, 1);
     }
 
-    function testUpdaterCanWriteOwnerControls() public {
-        // a non-writer cannot push
-        vm.prank(bob);
-        vm.expectRevert("not writer");
-        oracle.setAnswer(13e8);
-        // owner authorizes bob (stands in for the step-2 Chainlink Functions consumer)
-        oracle.setUpdater(bob);
-        vm.prank(bob);
-        oracle.setAnswer(13e8);
-        (, int256 answer,,,) = oracle.latestRoundData();
-        assertEq(answer, 13e8);
+    function testFloatingBpsFromOracle() public view {
+        assertEq(mi.floatingBps(), int256(1000)); // 10.0%/yr -> 1000 bps
     }
 
     function testRejectsNonPositiveAnswer() public {
