@@ -1,17 +1,22 @@
-// Serention testnet trading dapp (ethers v6). Connects MetaMask on Sepolia and
-// drives the MockUSDC / IndexOracle / MarginedIndex contracts.
+// Serention testnet — Net-Loss Future dapp (ethers v6).
+// Trades a dated, cash-settled future on the net-loss rate. LONG gains when the loss rate
+// rises (hedge an ABS book); SHORT fades it. Mark = the net-loss rate (8 decimals); the
+// contract settles in arrears to the realized print. Collateral = test USDC (MockUSDC).
 const cfg = window.SERENTION;
 const $ = id => document.getElementById(id);
 const D = cfg.usdcDecimals;
-let provider, signer, addr, usdc, oracle, mi;
-let usdcR, oracleR, miR; // read-only instances on a dedicated RPC (resilient to wallet RPC downtime)
+let provider, signer, addr, readProvider;
+let usdc, usdcR;            // MockUSDC (signer + read)
+let fut, futR;             // selected Net-Loss Future (signer + read)
+let futAddr = cfg.strip && cfg.strip[0] ? cfg.strip[0].address : cfg.addresses.netLossFuture;
 
-const configured = cfg.addresses.usdc && cfg.addresses.oracle && cfg.addresses.margined;
+const configured = cfg.addresses.usdc && futAddr;
 if (!configured) { $("needsetup").style.display = ""; $("connect").disabled = true; }
 
-const status = (m, err) => { const s = $("status"); s.textContent = m; s.style.color = err ? "#e23b4e" : "#8a97a8"; };
+const status = (m, e) => { const s = $("status"); s.textContent = m; s.style.color = e ? "#ff5c5c" : "#b9a8ec"; };
 const usd = bn => "$" + Number(ethers.formatUnits(bn, D)).toLocaleString(undefined, {maximumFractionDigits: 0});
 const usdSigned = bn => (bn < 0n ? "-" : "") + usd(bn < 0n ? -bn : bn);
+const ratePct = bn => Number(ethers.formatUnits(bn, 8)).toFixed(2) + "%"; // loss rate, 8 decimals
 
 $("connect").addEventListener("click", connect);
 
@@ -20,7 +25,6 @@ async function connect() {
   try {
     provider = new ethers.BrowserProvider(window.ethereum);
     await provider.send("eth_requestAccounts", []);
-    // ensure Sepolia
     try {
       await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: cfg.chainIdHex }] });
     } catch (e) {
@@ -30,14 +34,11 @@ async function connect() {
     }
     signer = await provider.getSigner();
     addr = await signer.getAddress();
+    readProvider = cfg.readRpc ? new ethers.JsonRpcProvider(cfg.readRpc) : provider;
     usdc = new ethers.Contract(cfg.addresses.usdc, cfg.abi.usdc, signer);
-    oracle = new ethers.Contract(cfg.addresses.oracle, cfg.abi.oracle, signer);
-    mi = new ethers.Contract(cfg.addresses.margined, cfg.abi.margined, signer);
-    // Reads go through a dedicated RPC so a flaky wallet RPC can't break the page.
-    const readProvider = cfg.readRpc ? new ethers.JsonRpcProvider(cfg.readRpc) : provider;
     usdcR = new ethers.Contract(cfg.addresses.usdc, cfg.abi.usdc, readProvider);
-    oracleR = new ethers.Contract(cfg.addresses.oracle, cfg.abi.oracle, readProvider);
-    miR = new ethers.Contract(cfg.addresses.margined, cfg.abi.margined, readProvider);
+    buildStripSelector();
+    bindFuture(futAddr);
     $("wallet").textContent = addr.slice(0, 6) + "…" + addr.slice(-4);
     $("app").style.display = ""; $("connect").style.display = "none";
     wire();
@@ -46,12 +47,26 @@ async function connect() {
   } catch (e) { status(err(e), true); }
 }
 
+function bindFuture(a) {
+  futAddr = a;
+  fut = new ethers.Contract(a, cfg.abi.netLossFuture, signer);
+  futR = new ethers.Contract(a, cfg.abi.netLossFuture, readProvider);
+}
+
+function buildStripSelector() {
+  const sel = $("contract");
+  if (!sel || !cfg.strip) return;
+  sel.innerHTML = cfg.strip.map(s => `<option value="${s.address}">${s.label}</option>`).join("");
+  sel.value = futAddr;
+  sel.onchange = async () => { bindFuture(sel.value); status("Switched contract."); await refresh(); };
+}
+
 function wire() {
   $("faucet").onclick = () => tx(() => usdc.mint(ethers.parseUnits("100000", D)), "Minting test USDC…");
   $("deposit").onclick = deposit;
-  $("withdraw").onclick = () => tx(() => mi.withdraw(amt()), "Withdrawing…");
-  $("open").onclick = () => tx(() => mi.open($("side").value === "long", notional()), "Opening position…");
-  $("close").onclick = () => tx(() => mi.close(), "Closing position…");
+  $("withdraw").onclick = () => tx(() => fut.withdraw(amt()), "Withdrawing…");
+  $("open").onclick = () => tx(() => fut.open($("side").value === "long", notional()), "Opening position…");
+  $("close").onclick = () => tx(() => fut.close(), "Closing position…");
 }
 
 const amt = () => ethers.parseUnits($("amt").value || "0", D);
@@ -60,9 +75,9 @@ const notional = () => ethers.parseUnits($("notional").value || "0", D);
 async function deposit() {
   try {
     const need = amt();
-    const allowed = await usdc.allowance(addr, cfg.addresses.margined);
-    if (allowed < need) { status("Approving USDC…"); await (await usdc.approve(cfg.addresses.margined, need)).wait(); }
-    await tx(() => mi.deposit(need), "Depositing collateral…");
+    const allowed = await usdc.allowance(addr, futAddr);
+    if (allowed < need) { status("Approving USDC…"); await (await usdc.approve(futAddr, need)).wait(); }
+    await tx(() => fut.deposit(need), "Depositing collateral…");
   } catch (e) { status(err(e), true); }
 }
 
@@ -73,20 +88,24 @@ async function tx(fn, msg) {
 
 async function refresh() {
   try {
-    const [rd, wbal, coll, pnl, eq, pos] = await Promise.all([
-      oracleR.latestRoundData(), usdcR.balanceOf(addr), miR.collateral(addr),
-      miR.pnlOf(addr), miR.equityOf(addr), miR.getPosition(addr)
+    const [mark, wbal, coll, pnl, eq, pos, settled, settAt, label] = await Promise.all([
+      futR.markPrice(), usdcR.balanceOf(addr), futR.collateral(addr),
+      futR.pnlOf(addr), futR.equityOf(addr), futR.getPosition(addr),
+      futR.settled(), futR.settlementTime(), futR.referenceLabel()
     ]);
-    const price = rd[1]; // answer (int256), index level * 1e8
-    $("kPrice").textContent = Number(ethers.formatUnits(price, 8)).toFixed(2);
+    $("kPrice").textContent = ratePct(mark);
     $("kWallet").textContent = usd(wbal);
     $("kColl").textContent = usd(coll);
     $("kPnl").innerHTML = `<span class="${pnl < 0n ? "neg" : "pos"}">${usdSigned(pnl)}</span>`;
     $("kEquity").textContent = usdSigned(eq);
+    const when = new Date(Number(settAt) * 1000).toISOString().slice(0, 10);
+    $("settleline").textContent = settled
+      ? `${label} — SETTLED at ${ratePct(mark)}`
+      : `${label} — marks to the live net-loss rate; settles in arrears ~${when}`;
     const [n, entry, isLong, open] = pos;
     $("posline").innerHTML = open
-      ? `Open: <b class="${isLong ? "pos" : "neg"}">${isLong ? "LONG" : "SHORT"}</b> · notional ${usd(n)} · entry ${Number(ethers.formatUnits(entry, 8)).toFixed(2)}`
-      : "No open position.";
+      ? `Open: <b class="${isLong ? "pos" : "neg"}">${isLong ? "LONG (losses rise)" : "SHORT (losses fall)"}</b> · notional ${usd(n)} · entry ${ratePct(entry)}`
+      : "No open position on this contract.";
   } catch (e) { status(err(e), true); }
 }
 
