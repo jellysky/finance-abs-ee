@@ -16,9 +16,9 @@ window.SERENTION = {
   },
   // Net-Loss Future strip (dated monthly series, shared net-loss oracle) — a forward loss curve.
   strip: [
-    { label: "Front month", address: "0x5bb21f95f6a2b44c57fc4ab178491add597b3092" },
-    { label: "M+2",         address: "0x91424bf7747bcd30587d2f93ce8033391ad68efd" },
-    { label: "M+3",         address: "0x0cb6e40a1f2b7c808c3bcf0db90f11db8fcf32ba" }
+    { label: "Jun 2026 (settles Jul 22)", address: "0xfc097ca716ebe8792364a397a11a36688c4a2620" },
+    { label: "Jul 2026 (settles Aug 22)", address: "0xb794d00bf66afcafde095552e57d51fa5f7836cc" },
+    { label: "Aug 2026 (settles Sep 22)", address: "0xe645295b7c4137f968efa596ef22adab085b7793" }
   ],
   abi: {
     usdc: [

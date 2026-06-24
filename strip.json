@@ -1,0 +1,5 @@
+[
+  { "label": "Jun 2026", "address": "0xfc097ca716ebe8792364a397a11a36688c4a2620", "refMonth": "2026-06-01", "settleTs": 1784692800 },
+  { "label": "Jul 2026", "address": "0xb794d00bf66afcafde095552e57d51fa5f7836cc", "refMonth": "2026-07-01", "settleTs": 1787371200 },
+  { "label": "Aug 2026", "address": "0xe645295b7c4137f968efa596ef22adab085b7793", "refMonth": "2026-08-01", "settleTs": 1790049600 }
+]
