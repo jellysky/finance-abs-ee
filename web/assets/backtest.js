@@ -7,15 +7,24 @@ const C = {accent:"#14b8c4", green:"#22c55e", blue:"#3b82f6", muted:"#c9b8f2", a
 
 let SERIES = [];
 let mainChart, marginChart;
+const FIELD_LABELS = {
+  nli: "net-loss index", net_loss: "net loss rate", net_yield: "net yield (cash)",
+  net_yield_accrued: "net yield (accrued)", delq30: "30+ DPD rate", delq60: "60+ DPD rate",
+};
 
 Promise.all([
   fetch("data/auto-subprime.json").then(r => r.json()),
   fetch("data/netyield.json").then(r => r.json()).catch(() => null),
-]).then(([d, ny]) => {
+  fetch("data/nli.json").then(r => r.json()).catch(() => null),
+]).then(([d, ny, nli]) => {
   SERIES = d.series;
   if (ny && ny.series) {   // merge the net-yield index in by month
     const m = new Map(ny.series.map(s => [s.date, s]));
     SERIES.forEach(s => { const n = m.get(s.date); if (n) { s.net_yield = n.net_yield; s.net_yield_accrued = n.net_yield_accrued; } });
+  }
+  if (nli && nli.series) {  // merge the net-loss index (the future's settlement reference)
+    const m = new Map(nli.series.map(s => [s.date, s.nli]));
+    SERIES.forEach(s => { if (m.has(s.date)) s.nli = m.get(s.date); });
   }
   const ds = SERIES.map(s => s.date.slice(0, 7));
   const e = document.getElementById("entry"), x = document.getElementById("exit");
@@ -52,12 +61,13 @@ function run() {
                     .map(s => ({ym: s.date.slice(0,7), p: s[field]}));
   if (pts.length < 2) { status.textContent = "Not enough data in that window for this series."; return; }
   const P0 = pts[0].p, IM = notional * imPct, MM = notional * mmPct;
-  if (!(P0 > 0)) { status.textContent = "Entry index value must be positive."; return; }
+  if (P0 == null || !isFinite(P0)) { status.textContent = "Entry rate is unavailable for that month."; return; }
 
+  // Linear (DV01) payoff: each point on the rate = 1% of notional → divide the rate move by 100.
   let eqL = IM, eqS = IM, cumTopL = 0, cumTopS = 0, cumPnlL = 0, callsL = 0, callsS = 0, firstCallL = null, firstCallS = null;
   const rows = [], cfL = [], cfS = [];
   pts.forEach((pt, i) => {
-    const mtmL = i === 0 ? 0 : notional * (pt.p - pts[i - 1].p) / P0, mtmS = -mtmL;
+    const mtmL = i === 0 ? 0 : notional * (pt.p - pts[i - 1].p) / 100, mtmS = -mtmL;
     cumPnlL += mtmL;
     eqL += mtmL; eqS += mtmS;
     const eqLpre = eqL, eqSpre = eqS;
@@ -68,7 +78,7 @@ function run() {
     cfS.push(i === 0 ? -(IM + gas) : -topS);
     rows.push({ym: pt.ym, p: pt.p, mtmL, mtmS, cumPnlL, eqLpre, eqSpre, topL, topS, capL: IM + cumTopL, capS: IM + cumTopS});
   });
-  const totalL = notional * (pts[pts.length - 1].p - P0) / P0;
+  const totalL = notional * (pts[pts.length - 1].p - P0) / 100;
   const eqLclose = IM + totalL + cumTopL, eqSclose = IM - totalL + cumTopS;
   cfL[cfL.length - 1] += eqLclose; cfS[cfS.length - 1] += eqSclose;
 
@@ -86,7 +96,8 @@ function run() {
   renderCharts(rows, IM);
   renderTable(rows, MM);
   document.getElementById("results").style.display = "";
-  status.textContent = `${rows.length-1} months · ${monthLabel(entry)} → ${monthLabel(exit)} · index ${P0.toFixed(1)} → ${pts[pts.length-1].p.toFixed(1)} (${fmtPct((pts[pts.length-1].p-P0)/P0)})`;
+  const Pn = pts[pts.length-1].p, dPts = Pn - P0;
+  status.textContent = `${rows.length-1} months · enter ${monthLabel(entry)} → settles ${monthLabel(exit)} · rate ${P0.toFixed(2)} → ${Pn.toFixed(2)} (${dPts>=0?"+":""}${dPts.toFixed(2)} pts)`;
 }
 
 function renderMetrics(o) {
@@ -106,8 +117,9 @@ function renderMetrics(o) {
     col("short", o.totalS, o.irrS, o.capS, o.topS, o.callsS, o.firstCallS, o.ddS);
   const shared = `Notional <b>${fmt$(o.notional)}</b> · initial margin <b>${fmt$(o.IM)}</b>
     (${(o.imPct*100)|0}% → ${(1/o.imPct).toFixed(1)}× leverage) · maintenance margin <b>${fmt$(o.MM)}</b> (${(o.mmPct*100)|0}%) ·
-    gas <b>${fmt$(o.gas)}</b> · ${o.months} months · index ${o.field} <b>${o.P0.toFixed(1)} → ${o.Pn.toFixed(1)}</b>.
-    <br><span style="color:#c9b8f2">When account equity (margin + PnL) falls below the maintenance margin, the holder must top up to the initial margin to stay in — that month's injection is the <b>Margin top-up</b>. If they don't, the position is liquidated at that point instead.</span>`;
+    gas <b>${fmt$(o.gas)}</b> · ${o.months} months · ${FIELD_LABELS[o.field] || o.field} <b>${o.P0.toFixed(2)} → ${o.Pn.toFixed(2)}</b>
+    (linear payoff: ${(o.Pn-o.P0>=0?"+":"")}${(o.Pn-o.P0).toFixed(2)} pts × 1% of notional).
+    <br><span style="color:#c9b8f2">Marked to market monthly to the prevailing rate, then settled in arrears to the realized print at the settlement month. When account equity (margin + PnL) falls below the maintenance margin, the holder must top up to the initial margin to stay in — that month's injection is the <b>Margin top-up</b>. If they don't, the position is liquidated at that point instead.</span>`;
   let n = document.getElementById("sharednote");
   if (!n) { n = document.createElement("div"); n.id = "sharednote"; n.className = "note"; document.getElementById("metrics").after(n); }
   n.innerHTML = shared;
@@ -118,11 +130,11 @@ function renderCharts(rows, IM) {
   if (mainChart) mainChart.destroy(); if (marginChart) marginChart.destroy();
   mainChart = new Chart(document.getElementById("cMain"), {
     data: {labels, datasets: [
-      {type:"line", label:"Index level", data: rows.map(r => r.p), borderColor: C.muted, borderWidth: 2, pointRadius: 0, yAxisID: "y1", tension: .2},
+      {type:"line", label:"Underlying rate", data: rows.map(r => r.p), borderColor: C.muted, borderWidth: 2, pointRadius: 0, yAxisID: "y1", tension: .2},
       {type:"line", label:"Long cumulative PnL", data: rows.map(r => r.cumPnlL), borderColor: C.green, borderWidth: 2, pointRadius: 0, tension: .2},
       {type:"line", label:"Short cumulative PnL", data: rows.map(r => -r.cumPnlL), borderColor: C.accent, borderWidth: 2, pointRadius: 0, tension: .2},
     ]},
-    options: chartOpts("PnL ($)", {y1: {position:"right", title:{display:true,text:"Index level"}, grid:{drawOnChartArea:false}}})
+    options: chartOpts("PnL ($)", {y1: {position:"right", title:{display:true,text:"Rate (%)"}, grid:{drawOnChartArea:false}}})
   });
   marginChart = new Chart(document.getElementById("cMargin"), {
     data: {labels, datasets: [
@@ -142,7 +154,7 @@ function chartOpts(yTitle, extra) {
 
 function renderTable(rows, MM) {
   const tu = t => t > 0 ? ` style="background:rgba(245,158,11,.16)"` : "";
-  const head = `<thead><tr><th>Month</th><th>Index</th>
+  const head = `<thead><tr><th>Month</th><th>Rate</th>
     <th>Long PnL</th><th>Long cum.</th><th>Long equity</th><th>Long top-up</th>
     <th>Short PnL</th><th>Short cum.</th><th>Short equity</th><th>Short top-up</th></tr></thead>`;
   const body = rows.map(r => `<tr>
