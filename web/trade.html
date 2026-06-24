@@ -15,6 +15,9 @@
 <main class="wrap">
   <div class="phead"><h1>Trade the index</h1><span class="pill planned">Sepolia testnet</span>
     <span class="wallet" id="wallet">not connected</span></div>
+  <p class="note" style="border-color:var(--accent2)">🚧 <b>Building: the Net-Loss Future</b> — a dated, cash-settled monthly future on the pool's
+     <b>net-loss rate</b> (settles in arrears to the realized loss print; payoff = side × notional × Δloss-rate, DV01-sized; USDC margin).
+     See the <a href="product.html?slug=auto-subprime" style="color:var(--accent)">Index page</a> for the design. The live demo below is our earlier margined-index POC.</p>
   <p class="note"><b>Testnet proof-of-concept.</b> Margined, cash-settled position on the Auto Subprime Credit Index, collateralized with test USDC.
      LONG profits if credit deteriorates (index rises); SHORT mirrors it. Payoff: notional × (price − entry) / entry. No real funds — Sepolia only.</p>
 

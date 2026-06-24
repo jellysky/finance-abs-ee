@@ -9,8 +9,10 @@ window.SERENTION = {
   addresses: {
     usdc: "0x2A79d10E87ac92a185117ED2C0922d056421a06b",      // MockUSDC (Sepolia)
     oracle: "0x99e3Eee494164F28781cDF8612bce410CaBA0826",    // SerentionIndexOracle, AggregatorV3 (Sepolia)
-    margined: "0x59Ef5b42A2E080Bfd317c0AE32b9e902e100F914",  // MarginedIndex (Sepolia)
-    feeder: "0x9f37Eb792b60E89465B7b545fe770c591646755b"     // SerentionFunctionsFeeder, Chainlink Functions (Sepolia)
+    margined: "0x59Ef5b42A2E080Bfd317c0AE32b9e902e100F914",  // MarginedIndex (Sepolia, prior POC)
+    feeder: "0x9f37Eb792b60E89465B7b545fe770c591646755b",    // SerentionFunctionsFeeder, Chainlink Functions (Sepolia)
+    netLossFuture: "0x5bb21f95f6a2b44c57fc4ab178491add597b3092", // NetLossFuture (Sepolia)
+    netLossOracle: "0xb1405f63aadf7d87d81dd6f18590bd7fd7d6e542"  // net-loss rate oracle (Sepolia)
   },
   abi: {
     usdc: [
