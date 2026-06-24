@@ -39,7 +39,6 @@ function render(d) {
     `${d.ticker ? d.ticker + " · " : ""}as of ${fmtMonth(L.as_of)}` + (L.first ? ` · history from ${fmtMonth(L.first)}` : "");
 
   const kpis = [
-    ["Stress index", L.stress != null ? L.stress.toFixed(2) + "σ" : "—"],
     ["30+ DPD", pct(L.delq30)], ["60+ DPD", pct(L.delq60)],
     ["Net loss (ann.)", pct(L.net_loss)], ["Recovery", pct(L.recovery)],
     ["Constituent deals", L.n_deals ?? "—"], ["Avg FICO", L.fico ?? "—"],
@@ -54,10 +53,6 @@ function render(d) {
   const labels = d.series.map(s => s.date);
   const get = k => d.series.map(s => s[k]);
   const covid = boxAnno(d.covid);
-
-  line("cStress", labels,
-    [ds("Stress index", get("stress"), C.accent, {fill:true, fillc:"rgba(20,184,196,.10)"})],
-    {yTitle:"σ", anno:{covid, zero:zeroLine()}});
 
   line("cPerf", labels, [
     ds("30+ DPD %", get("delq30"), C.accent),
@@ -172,9 +167,6 @@ function boxAnno(c) {
   return {type:"box", xMin:c.start, xMax:"2020-12-01",
     backgroundColor:"rgba(245,158,11,.09)", borderWidth:0,
     label:{display:false}};
-}
-function zeroLine() {
-  return {type:"line", yMin:0, yMax:0, borderColor:"rgba(255,255,255,0.35)", borderWidth:1, borderDash:[4,4]};
 }
 
 // align an array of {date,<key>} (or our series) to a master label list
