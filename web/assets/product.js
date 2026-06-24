@@ -12,6 +12,22 @@ fetch(`data/${slug}.json`).then(r => r.json()).then(render).catch(err => {
     `Run <code>python web/build_site_data.py</code> to generate <code>data/${slug}.json</code>. (${err})`;
 });
 
+// Net-loss index — the Net-Loss Future's settlement reference (data/nli.json).
+// Rendered independently so a missing file just hides the card.
+fetch("data/nli.json").then(r => r.json()).then(renderNLI).catch(() => {
+  const card = document.getElementById("nliCard");
+  if (card) card.style.display = "none";
+});
+
+function renderNLI(d) {
+  if (!d || !d.series || !d.series.length) { const c = document.getElementById("nliCard"); if (c) c.style.display = "none"; return; }
+  const labels = d.series.map(s => s.date);
+  const covid = boxAnno({start:"2020-04-01"});
+  line("cNLI", labels, [
+    ds("Net-loss index % (ann.)", d.series.map(s => s.nli), C.accent, {fill:true, fillc:"rgba(20,184,196,.10)"}),
+  ], {yTitle:"% per year", anno:{covid}});
+}
+
 const pct = v => (v == null ? "—" : v.toFixed(1) + "%");
 const fmtMonth = s => { const [y,m] = s.split("-"); return ["", "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m] + " " + y; };
 

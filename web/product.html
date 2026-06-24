@@ -107,6 +107,14 @@
   <h2 class="kpi-head">Most Recent Index Characteristics</h2>
   <div class="kpis" id="kpis"></div>
 
+  <div class="chart-card" id="nliCard">
+    <h2>Net-loss index — the settlement reference</h2>
+    <p class="sub">The future's underlying: annualized gross net-loss rate, recognized early off the
+      90+ DPD pipeline (× ~0.81 empirical roll-to-charge-off), so it leads booked losses. Recoveries
+      excluded. % per year; shaded band = COVID accommodation window.</p>
+    <div class="chart-box"><canvas id="cNLI"></canvas></div>
+  </div>
+
   <div class="chart-card">
     <h2>Stress index</h2>
     <p class="sub">Rolling-24-month z-score composite, higher = worse. ~0 in normal periods; shaded band = COVID accommodation window.</p>
