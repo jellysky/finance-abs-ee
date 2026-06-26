@@ -50,37 +50,25 @@ function render(d) {
     `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
   document.getElementById("method").innerHTML = `<b>Methodology.</b> ${d.methodology}`;
 
-  const labels = d.series.map(s => s.date);
-  const get = k => d.series.map(s => s[k]);
-  const covid = boxAnno(d.covid);
-
-  line("cPerf", labels, [
-    ds("30+ DPD %", get("delq30"), C.accent),
-    ds("60+ DPD %", get("delq60"), C.amber),
-    ds("Net loss % (ann.)", get("net_loss"), C.blue),
-  ], {yTitle:"%", anno:{covid}});
-
-  const fl = union(labels, d.fed.sub620_30plus_q.map(x=>x.date), d.fed.auto90_annl.map(x=>x.date));
-  line("cFed", fl, [
-    ds("Our 30+ DPD %", mapTo(fl, d.series, "delq30"), C.accent, {span:true}),
-    ds("Fed subprime <620, 30+ % (q)", mapTo(fl, d.fed.sub620_30plus_q, "value"), C.blue, {span:true, dash:[5,4]}),
-    ds("Fed all-auto 90+ % (ann.)", mapTo(fl, d.fed.auto90_annl, "value"), C.green, {span:true, dash:[2,3]}),
-  ], {yTitle:"%", anno:{covid}});
-
-  new Chart(document.getElementById("cComp"), {
-    data:{labels, datasets:[
-      {type:"bar", label:"Constituent deals", data:get("n_deals"),
-       backgroundColor:"rgba(59,130,246,.32)", yAxisID:"y"},
-      {type:"line", label:"Avg FICO", data:get("fico"), borderColor:C.accent,
-       borderWidth:2, pointRadius:0, tension:.25, spanGaps:true, yAxisID:"y1"},
-    ]},
-    options: baseOpts({yTitle:"# deals", anno:{covid},
-      y1:{position:"right", title:{display:true,text:"Avg FICO"}, min:540, max:660,
-          grid:{drawOnChartArea:false}}}),
-  });
-  renderBenchmark(d);
+  renderValidation(d);
   renderDuration(d);
   renderCompTable(d);
+}
+
+// One collapsed validation chart: our loss vs NY Fed series and rating-agency loss markers.
+function renderValidation(d) {
+  const fed = d.fed || {}, a = d.agency || {};
+  const sub = fed.sub620_30plus_q || [], auto = fed.auto90_annl || [];
+  const fl = union(d.series.map(s => s.date), sub.map(x => x.date), auto.map(x => x.date));
+  const marker = (pts, color, label) => ({type:"line", label, data: mapTo(fl, pts || [], "value"),
+    borderColor: color, backgroundColor: color, showLine: false, pointRadius: 6, pointStyle: "rectRot"});
+  line("cValid", fl, [
+    ds("Our net loss % (ann.)", mapTo(fl, d.series, "net_loss"), C.accent, {span:true}),
+    ds("Fed subprime <620, 30+ % (q)", mapTo(fl, sub, "value"), C.blue, {span:true, dash:[5,4]}),
+    ds("Fed all-auto 90+ % (ann.)", mapTo(fl, auto, "value"), C.green, {span:true, dash:[2,3]}),
+    marker(a.kbra_nonprime && a.kbra_nonprime.net_loss_annl, C.amber, "KBRA Non-Prime ◇"),
+    marker(a.fitch_subprime && a.fitch_subprime.net_loss_annl, C.muted, "Fitch Subprime ◇"),
+  ], {yTitle:"%", anno:{covid: boxAnno(d.covid)}});
 }
 
 function renderDuration(d) {
@@ -104,35 +92,6 @@ function renderCompTable(d) {
     `<table class="dt"><thead><tr><th>Month</th><th>Deals</th><th>Borrowers</th><th>WA FICO</th>
      <th>WA orig (mo)</th><th>WA rem (mo)</th><th>Sched WAL</th><th>Realized WAL</th></tr></thead>
      <tbody>${body}</tbody></table>`;
-}
-
-function renderBenchmark(d) {
-  const a = d.agency || {};
-  const card = document.getElementById("cBench").closest(".chart-card");
-  if (!Object.keys(a).length) { if (card) card.style.display = "none"; return; }
-  const labels = d.series.map(s => s.date);
-  const marker = (pts, color, label) => ({type:"line", label, data: mapTo(labels, pts || [], "value"),
-    borderColor: color, backgroundColor: color, showLine: false, pointRadius: 6, pointStyle: "rectRot"});
-  new Chart(document.getElementById("cBench"), {data:{labels, datasets:[
-    {type:"line", label:"OUR net loss % (ann.)", data: d.series.map(s => s.net_loss),
-     borderColor: C.accent, borderWidth: 2, pointRadius: 0, tension: .25, spanGaps: true},
-    marker(a.kbra_nonprime && a.kbra_nonprime.net_loss_annl, C.blue, "KBRA Non-Prime"),
-    marker(a.fitch_subprime && a.fitch_subprime.net_loss_annl, C.green, "Fitch Subprime"),
-  ]}, options: baseOpts({yTitle:"Annualized net loss (%)"})});
-
-  const last = arr => (arr && arr.length) ? arr[arr.length - 1].value : null;
-  const m = (s, k) => a[s] ? a[s][k] : null;
-  const v = x => x == null ? "—" : x.toFixed(1) + "%";
-  const L = d.latest;
-  const rows = [
-    ["Annualized net loss", L.net_loss, last(m("kbra_nonprime","net_loss_annl")), last(m("fitch_subprime","net_loss_annl"))],
-    ["60+ day delinquency", L.delq60, last(m("kbra_nonprime","delq60")), last(m("fitch_subprime","delq60"))],
-    ["Recovery rate", L.recovery, last(m("kbra_nonprime","recovery")), last(m("fitch_subprime","recovery"))],
-  ];
-  document.getElementById("benchTable").innerHTML =
-    `<table class="dt"><thead><tr><th>Latest reading</th><th>Ours (&lt;640)</th><th>KBRA Non-Prime</th><th>Fitch Subprime</th></tr></thead><tbody>` +
-    rows.map(r => `<tr><td>${r[0]}</td><td>${v(r[1])}</td><td>${v(r[2])}</td><td>${v(r[3])}</td></tr>`).join("") +
-    `</tbody></table>`;
 }
 
 function ds(label, data, color, o = {}) {

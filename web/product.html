@@ -3,18 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Serention — Index</title>
+<title>Serention — Auto Subprime Loss Index</title>
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
 <header class="site"><div class="wrap">
   <a class="brand" href="index.html"><img class="logo" src="assets/serention-logo.svg" alt="Serention"><small>Indices</small></a>
-  <nav><a href="index.html">Products</a><a href="backtest.html">Backtest</a><a href="trade.html">Trade (testnet)</a></nav>
+  <nav>
+    <span class="menu"><a href="index.html">Products ▾</a>
+      <span class="dropdown">
+        <a href="product.html?slug=auto-subprime">Auto Subprime Loss Index</a>
+        <a href="backtest.html">Backtest</a>
+        <a href="trade.html">Trade (testnet)</a>
+      </span>
+    </span>
+    <a href="contact.html">Contact</a>
+  </nav>
 </div></header>
 
 <main class="wrap">
   <div class="phead">
-    <h1 id="title">Loading…</h1>
+    <h1 id="title">Auto Subprime Loss Index</h1>
     <span class="pill live">Live</span>
     <span class="asof" id="asof"></span>
   </div>
@@ -23,121 +32,125 @@
     <a href="trade.html"><button class="ghost">Trade on testnet</button></a>
   </div>
 
-  <div class="about">
-    <p class="lead">A monthly, loan-level measure of how subprime auto borrowers are
-      actually paying — built straight from the securitization tapes, not survey data —
-      and published on-chain as the settlement reference for a tradeable
-      <b>Net-Loss Future</b> (in development).</p>
-    <dl>
-      <dt>What's in it</dt>
-      <dd>Loan-level <b>SEC ABS-EE</b> filings from subprime auto securitizations: deals
-        whose balance-weighted issuance FICO is <b>below 640</b> and whose original pool
-        topped <b>$200M</b>. Constituents are drawn from staggered <b>2017–2024+</b> vintages
-        across the major subprime shelves (Santander Drive, Exeter, AmeriCredit, Bridgecrest,
-        Carvana), so calendar coverage stays continuous as deals season and roll off — the live
-        pool runs up to <b>~12 deals</b> at a time, with history back to <b>December 2016</b>.</dd>
+  <h2 class="kpi-head">Index characteristics</h2>
+  <div class="kpis" id="kpis"></div>
 
-      <dt>Handling seasoning</dt>
-      <dd>Subprime losses follow a hump as a deal ages, which would otherwise dominate the
-        signal. We address it two ways. First, the index <b>pools loans across many deals of
-        staggered vintages and balance-weights them</b>, so the blended pool age stays roughly
-        flat and the level reflects credit, not the loss curve of any one deal. Second, a deal
-        <b>exits the pool once its balance falls below 10% of issuance</b>, dropping the
-        surviving-bad-loan tail of a nearly paid-down deal.</dd>
-
-      <dt>How it's calculated</dt>
-      <dd>Each month we recompute a set of balance-weighted credit metrics over the pooled loan
-        universe — <b>30+ and 60+ day delinquency, Current→30+ roll rate, annualized net loss,
-        and recovery rate</b> — reported directly as percentages of the pool. <b>Rebuilt monthly</b>
-        as new ABS-EE filings post; the COVID accommodation window (Apr–Dec 2020) is flagged but
-        kept in the series.</dd>
-
-      <dt>The Net-Loss Future <span class="pill planned">in development</span></dt>
-      <dd>The flagship tradeable product is a <b>dated, cash-settled monthly future</b> on the pool's
-        <b>net-loss rate</b>. Each contract <b>settles in arrears to the realized loss print</b> for its
-        reference month; the payoff is linear in the rate — <b>PnL = side × notional × (loss<sub>settle</sub>
-        − loss<sub>entry</sub>)</b> — sized to a desk's dollar loss-exposure (DV01). You go <b>long to gain
-        when losses rise</b> (hedging an ABS book) or short to fade them. Collateralized in <b>USDC</b>
-        (testnet MockUSDC); listed as a monthly <b>strip</b> it forms a forward loss curve. Unaudited
-        testnet proof-of-concept — not for real funds.</dd>
-
-      <dt>Underlying: net loss, recognized early</dt>
-      <dd>The future references the pool's <b>gross net-loss rate</b> (charge-offs; recoveries excluded —
-        they arrive with a long, uncertain lag). Because <b>booked charge-offs trail real losses by ~a
-        year</b> (a loan sits at 120+ DPD ~13 months before the loss is booked), we recognize loss earlier
-        off the <b>90+ DPD pipeline</b>: empirically <b>~81%</b> of loans that reach 90+ DPD eventually
-        charge off (~94% by 120+). Scaling 90+ balances by that roll makes the index <b>lead</b> booked
-        losses and largely cancels the ABS-EE filing lag.</dd>
-
-      <dt>Validation</dt>
-      <dd>Built only from public SEC ABS-EE filings and cross-checked against NY Fed subprime and
-        auto-credit series (below) and rating-agency loss benchmarks. It's a quantitative research
-        signal, not investment advice.</dd>
-    </dl>
-
-    <div class="example">
-      <div class="ex-title">Worked example — pooling a metric across deals</div>
-      <p class="ex-note">Illustrative figures, following 30+ day delinquency.</p>
-      <p><b>Pool the metric across the live deals.</b> Sum each deal's 30+ DPD balance and its
-        active balance, then divide the totals — large deals carry proportionally more weight.</p>
-      <table class="dt ex-table"><thead><tr><th>Deal</th><th>Active balance</th><th>30+ DPD balance</th></tr></thead>
-        <tbody>
-          <tr><td>Santander 2023-A</td><td>$300M</td><td>$54M</td></tr>
-          <tr><td>Exeter 2022-3</td><td>$500M</td><td>$95M</td></tr>
-          <tr><td>AmeriCredit 2024-1</td><td>$200M</td><td>$46M</td></tr>
-          <tr><td><b>Pool</b></td><td><b>$1,000M</b></td><td><b>$195M</b></td></tr>
-        </tbody></table>
-      <p>Pooled 30+ DPD = $195M ÷ $1,000M = <b>19.5%</b>. The same pooling runs for 60+ DPD,
-        Current→30+ roll, annualized net loss, and recovery rate.</p>
+  <!-- 1 · Gross loss index (the tradeable index) + use cases -->
+  <div class="split-row">
+    <div class="chart-card" id="nliCard">
+      <h2>Gross loss index</h2>
+      <p class="sub">The tradeable index: annualized gross net-loss rate, recognized early off the 90+ DPD
+        pipeline so it leads booked losses. % per year; shaded band = COVID accommodation window.</p>
+      <div class="chart-box"><canvas id="cNLI"></canvas></div>
+    </div>
+    <div class="copy">
+      <h2>Use cases</h2>
+      <h3>Hedging</h3>
+      <p>An auto lender or ABS investor holding subprime exposure is effectively <b>short credit</b> —
+        rising losses erode the book. Going <b>long the Net-Loss Future pays out as losses rise</b>,
+        offsetting those markdowns. It's capital-light (post margin, not the full notional) and marks to
+        market monthly, so the hedge tracks the book between prints.</p>
+      <h3>Speculating</h3>
+      <p>Take a directional view on the loss rate. Go <b>long</b> if you expect losses to climb faster than
+        the market does; <b>short to get synthetically long credit</b> — if you think losses will
+        <b>shrink, or rise by less than the market expects</b>, shorting the future profits as the realized
+        print settles below your entry. Because each contract settles to a dated print, the <b>strip prices
+        the market's forward loss curve</b>, and your edge is the gap between your view and that curve.</p>
     </div>
   </div>
 
-  <h2 class="kpi-head">Most Recent Index Characteristics</h2>
-  <div class="kpis" id="kpis"></div>
-
-  <div class="chart-card" id="nliCard">
-    <h2>Net-loss index — the settlement reference</h2>
-    <p class="sub">The future's underlying: annualized gross net-loss rate, recognized early off the
-      90+ DPD pipeline (× ~0.81 empirical roll-to-charge-off), so it leads booked losses. Recoveries
-      excluded. % per year; shaded band = COVID accommodation window.</p>
-    <div class="chart-box"><canvas id="cNLI"></canvas></div>
+  <!-- 2 · Composition table + what's in it -->
+  <div class="split-row">
+    <div class="chart-card">
+      <h2>Pool composition by month</h2>
+      <p class="sub">Exact figures from the loan-level tapes (index-included, outstanding loans) — year-end
+        snapshots and latest. Terms/WAL in months.</p>
+      <div class="table-wrap" id="compTable"></div>
+    </div>
+    <div class="copy">
+      <h2>Composition</h2>
+      <p>Loan-level <b>SEC ABS-EE</b> filings from subprime auto securitizations: deals whose
+        balance-weighted issuance FICO is <b>below 640</b> and whose original pool topped <b>$200M</b>.</p>
+      <p>Constituents are drawn from staggered <b>2017–2024+</b> vintages across the major subprime shelves
+        (Santander Drive, Exeter, AmeriCredit, Bridgecrest, Carvana), so calendar coverage stays continuous
+        as deals season and roll off — the live pool runs up to <b>~12 deals</b> at a time, with history
+        back to <b>December 2016</b>.</p>
+    </div>
   </div>
 
-  <div class="chart-card">
-    <h2>Delinquency &amp; loss</h2>
-    <p class="sub">Balance-weighted, % of pool. 30+/60+ days past due (stock) and annualized net loss.</p>
-    <div class="chart-box"><canvas id="cPerf"></canvas></div>
+  <!-- 3 · Loan term & WAL + seasoning filter -->
+  <div class="split-row">
+    <div class="chart-card">
+      <h2>Loan term &amp; weighted-average life</h2>
+      <p class="sub">Balance-weighted across index-included loans: original &amp; remaining term, scheduled WAL
+        (contractual) and realized WAL (at the observed run-off, incl. prepay &amp; default). Months.</p>
+      <div class="chart-box"><canvas id="cDur"></canvas></div>
+    </div>
+    <div class="copy">
+      <h2>Seasoning filter</h2>
+      <p>Subprime losses follow a hump as a deal ages, which would otherwise dominate the signal. We address
+        it two ways.</p>
+      <p>First, the index <b>pools loans across many deals of staggered vintages and balance-weights them</b>,
+        so the blended pool age stays roughly flat and the level reflects credit, not the loss curve of any
+        one deal.</p>
+      <p>Second, a deal <b>exits the pool once its balance falls below 10% of issuance</b>, dropping the
+        surviving-bad-loan tail of a nearly paid-down deal.</p>
+    </div>
   </div>
 
-  <div class="chart-card">
-    <h2>Pool composition</h2>
-    <p class="sub">Constituent deals (bars) and balance-weighted average borrower FICO (line) over time.</p>
-    <div class="chart-box"><canvas id="cComp"></canvas></div>
+  <!-- 4 · Numerical calculation example + how the mark is calculated -->
+  <div class="split-row">
+    <div class="chart-card">
+      <h2>Calculation example — one monthly print</h2>
+      <p class="sub">Illustrative figures, tracing a month's print through to a future's payoff.</p>
+      <div class="table-wrap">
+        <table class="dt">
+          <tbody>
+            <tr><td>Beginning pool balance</td><td>$10,000M</td></tr>
+            <tr><td>Balance newly entering 90+ DPD</td><td>$123M</td></tr>
+            <tr><td>× roll-to-charge-off (0.81)</td><td>$99.6M</td></tr>
+            <tr><td>Monthly loss rate</td><td>$99.6M ÷ $10,000M = 0.996%</td></tr>
+            <tr><td>Annualized (× 12) = <b>index print</b></td><td><b>11.96%/yr</b></td></tr>
+            <tr><td>Long future entered at 10.50%, settles 11.96%</td><td>+1.46 pts</td></tr>
+            <tr><td><b>PnL on $100k notional</b> = $100k × 1.46 / 100</td><td class="pos"><b>+$1,460</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="copy">
+      <h2>How the mark is calculated</h2>
+      <p>Each month we measure the <b>balance newly entering 90+ DPD</b> across the pooled loans and scale it
+        by the empirical <b>~0.81 roll-to-charge-off</b> — from ~33M loan-months, ~81% of loans reaching
+        90+ DPD eventually charge off (~94% by 120+).</p>
+      <p>That recognizes loss <b>~a year before it's booked</b> (a loan sits at 120+ DPD ~13 months before
+        the charge-off posts), so the index <b>leads</b> realized losses. Recoveries are excluded — they
+        arrive with a long, uncertain lag.</p>
+      <p>Annualizing the monthly flow gives the print:
+        <b>100 × 12 × 0.81 × (balance entering 90+ DPD) / (beginning pool balance)</b>. A dated future
+        entered earlier then settles in arrears to that print, paying <b>1% of notional per point</b>.</p>
+    </div>
   </div>
 
-  <div class="chart-card">
-    <h2>Loan term &amp; weighted-average life</h2>
-    <p class="sub">Balance-weighted across index-included loans: original &amp; remaining term, scheduled WAL (contractual, no prepay) and realized WAL (projected at the observed monthly run-off, incl. prepay &amp; default). Months.</p>
-    <div class="chart-box"><canvas id="cDur"></canvas></div>
-  </div>
-
-  <div class="chart-card">
-    <h2>Pool composition by month</h2>
-    <p class="sub">Exact figures from the loan-level tapes (index-included, outstanding loans) — year-end snapshots and latest. Terms/WAL in months.</p>
-    <div class="table-wrap" id="compTable"></div>
-  </div>
-
-  <div class="chart-card">
-    <h2>Validation vs NY Fed</h2>
-    <p class="sub">Our 30+ DPD vs NY Fed subprime &lt;620 (quarterly 30+ flow) and all-auto 90+ transition. Definitions/levels differ — co-movement &amp; timing are the signal.</p>
-    <div class="chart-box"><canvas id="cFed"></canvas></div>
-  </div>
-
-  <div class="chart-card">
-    <h2>Rating-agency benchmark</h2>
-    <p class="sub">Our annualized net loss vs KBRA Non-Prime and Fitch Subprime auto-ABS indices. Those series are paywalled, so points are logged from public monthly disclosures and fill in over time (◇ markers = agency readings). Our deeper &lt;640 cut runs a touch higher, as expected.</p>
-    <div class="chart-box"><canvas id="cBench"></canvas></div>
-    <div id="benchTable" class="table-wrap" style="margin-top:14px"></div>
+  <!-- 5 · Validation (NY Fed + rating agency, one chart) + contract terms -->
+  <div class="split-row">
+    <div class="chart-card">
+      <h2>Validation</h2>
+      <p class="sub">Our loss against external references — NY Fed subprime/auto-credit series and KBRA/Fitch
+        rating-agency loss benchmarks (◇). Definitions &amp; levels differ; co-movement &amp; timing are the signal.</p>
+      <div class="chart-box"><canvas id="cValid"></canvas></div>
+    </div>
+    <div class="copy">
+      <h2>Contract terms</h2>
+      <p>The Net-Loss Future is a <b>dated, cash-settled monthly future</b> on the index. Each contract
+        <b>settles in arrears</b> to the realized print of its reference month, <b>once the lagged ABS-EE
+        data posts</b> (~the 22nd of the following month) — the settlement date is fixed to that print date.</p>
+      <p>Payoff is <b>linear in the rate</b>: PnL = side × notional × (rate<sub>settle</sub> −
+        rate<sub>entry</sub>) / 100, so one point (1% on the rate) = 1% of notional (DV01-style).</p>
+      <p>Collateralized in <b>USDC</b> (testnet MockUSDC): <b>20% initial margin</b>, <b>10% maintenance</b>;
+        below maintenance a holder tops up or is liquidated (0.5% of notional to the liquidator). Listed as a
+        monthly <b>strip</b>, the series form a forward loss curve. Unaudited testnet proof-of-concept — not
+        for real funds.</p>
+    </div>
   </div>
 
   <div class="methodology" id="method"></div>

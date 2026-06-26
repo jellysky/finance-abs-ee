@@ -115,11 +115,12 @@ def build_auto_subprime() -> dict:
         "covid": {"start": "2020-04-01", "end": "2020-12-31"},
         "agency": load_benchmarks(),
         "methodology": (
-            "Loan-level, balance-weighted composite built from SEC ABS-EE filings of "
-            "subprime auto securitizations (WAVG issuance FICO < 640). Components: 30+/60+ "
-            "DPD, Current→30+ roll rate, annualized net loss, recovery rate. The headline "
-            "stress index is a rolling-24-month z-score composite (higher = worse). "
-            "Validated against NY Fed auto-credit series."
+            "Loan-level, balance-weighted measures built from SEC ABS-EE filings of "
+            "subprime auto securitizations (WAVG issuance FICO < 640). The headline gross "
+            "loss index recognizes loss as balance enters 90+ DPD, scaled by the ~0.81 "
+            "empirical roll-to-charge-off and annualized, so it leads booked losses "
+            "(recoveries excluded). Reported alongside 30+/60+ DPD, Current→30+ roll, net "
+            "loss and recovery. Validated against NY Fed and rating-agency series."
         ),
     }
 

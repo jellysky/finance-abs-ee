@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serention — Contact</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img class="logo" src="assets/serention-logo.svg" alt="Serention"><small>Indices</small></a>
+  <nav>
+    <span class="menu"><a href="index.html">Products ▾</a>
+      <span class="dropdown">
+        <a href="product.html?slug=auto-subprime">Auto Subprime Loss Index</a>
+        <a href="backtest.html">Backtest</a>
+        <a href="trade.html">Trade (testnet)</a>
+      </span>
+    </span>
+    <a href="contact.html">Contact</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+  <div class="phead"><h1>Contact</h1></div>
+  <p class="note">Questions about the Auto Subprime Loss Index, data access, or the Net-Loss Future?
+     Send a note and it goes straight to our inbox. The form is spam-screened with a CAPTCHA.</p>
+
+  <form class="contact-card" id="contactForm" novalidate>
+    <div class="field">
+      <label class="fld" for="name">Name</label>
+      <input type="text" id="name" name="name" autocomplete="name" required>
+    </div>
+    <div class="field">
+      <label class="fld" for="email">Email</label>
+      <input type="email" id="email" name="email" autocomplete="email" required>
+    </div>
+    <div class="field">
+      <label class="fld" for="message">Message</label>
+      <textarea id="message" name="message" required></textarea>
+    </div>
+    <!-- Cloudflare Turnstile. Replace the test site key below with your real one. -->
+    <div class="cf-turnstile" data-sitekey="1x00000000000000000000AA" data-theme="dark"></div>
+    <div style="margin-top:16px"><button type="submit" id="send">Send message</button></div>
+    <div class="formnote" id="formnote"></div>
+  </form>
+</main>
+
+<footer class="site"><div class="wrap">
+  <div>© Serention</div><div>Data: SEC ABS-EE · NY Fed</div>
+</div></footer>
+
+<script src="assets/contact.js"></script>
+</body>
+</html>
