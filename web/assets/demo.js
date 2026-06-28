@@ -47,7 +47,7 @@ function newChart() {
     ]},
     options: { responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { labels: { boxWidth: 12, usePointStyle: true, padding: 12 } } },
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 12, usePointStyle: true, padding: 12 } } },
       scales: {
         x: { grid: { display: false }, ticks: { maxTicksLimit: 12, autoSkip: true } },
         y: { position: "left", title: { display: true, text: "Cumulative PnL ($)" }, grid: { color: "rgba(201,184,242,0.14)" } },

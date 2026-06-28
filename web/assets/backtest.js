@@ -156,7 +156,7 @@ function renderCharts(rows, IM, strike) {
 
 function chartOpts(yTitle, extra) {
   return {responsive:true, maintainAspectRatio:false, interaction:{mode:"index",intersect:false},
-    plugins:{legend:{labels:{boxWidth:12,usePointStyle:true,padding:12}}},
+    plugins:{legend:{position:"bottom",labels:{boxWidth:12,usePointStyle:true,padding:12}}},
     scales:{x:{grid:{display:false}, ticks:{maxTicksLimit:14, autoSkip:true}}, y:{title:{display:true,text:yTitle}, grid:{color:"rgba(201,184,242,0.14)"}}, ...extra}};
 }
 

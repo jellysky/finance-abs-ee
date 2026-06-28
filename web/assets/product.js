@@ -115,7 +115,7 @@ function baseOpts(cfg) {
   };
   if (cfg.y1) scales.y1 = cfg.y1;
   return {responsive:true, maintainAspectRatio:false, interaction:{mode:"index", intersect:false},
-    plugins:{legend:{labels:{boxWidth:12, usePointStyle:true, padding:14}},
+    plugins:{legend:{position:"bottom", labels:{boxWidth:12, usePointStyle:true, padding:14}},
              annotation:{annotations:anno},
              tooltip:{callbacks:{title:items=>fmtMonth(items[0].label)}}},
     scales};
