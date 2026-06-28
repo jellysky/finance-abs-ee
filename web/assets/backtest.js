@@ -53,6 +53,7 @@ function run() {
   const notional = +document.getElementById("notional").value;
   const imPct = +document.getElementById("im").value / 100, mmPct = +document.getElementById("mm").value / 100;
   const gas = +document.getElementById("gas").value || 0;
+  const entryRateRaw = document.getElementById("entryrate").value.trim();
   const status = document.getElementById("status");
 
   if (entry >= exit) { status.textContent = "Exit month must be after entry month."; return; }
@@ -60,14 +61,18 @@ function run() {
   const pts = SERIES.filter(s => s.date.slice(0,7) >= entry && s.date.slice(0,7) <= exit && s[field] != null)
                     .map(s => ({ym: s.date.slice(0,7), p: s[field]}));
   if (pts.length < 2) { status.textContent = "Not enough data in that window for this series."; return; }
-  const P0 = pts[0].p, IM = notional * imPct, MM = notional * mmPct;
+  const spot0 = pts[0].p;                                    // index spot at the entry month
+  const customStrike = entryRateRaw !== "" && isFinite(+entryRateRaw);
+  const P0 = customStrike ? +entryRateRaw : spot0;           // strike: user-entered rate, else spot
+  const IM = notional * imPct, MM = notional * mmPct;
   if (P0 == null || !isFinite(P0)) { status.textContent = "Entry rate is unavailable for that month."; return; }
 
-  // Linear (DV01) payoff: each point on the rate = 1% of notional → divide the rate move by 100.
+  // Linear (DV01) payoff vs the strike P0: each point on the rate = 1% of notional → divide the move by 100.
+  // Month 0 marks from the strike to the entry-month spot (the entry basis); later months mark month-over-month.
   let eqL = IM, eqS = IM, cumTopL = 0, cumTopS = 0, cumPnlL = 0, callsL = 0, callsS = 0, firstCallL = null, firstCallS = null;
   const rows = [], cfL = [], cfS = [];
   pts.forEach((pt, i) => {
-    const mtmL = i === 0 ? 0 : notional * (pt.p - pts[i - 1].p) / 100, mtmS = -mtmL;
+    const mtmL = notional * (pt.p - (i === 0 ? P0 : pts[i - 1].p)) / 100, mtmS = -mtmL;
     cumPnlL += mtmL;
     eqL += mtmL; eqS += mtmS;
     const eqLpre = eqL, eqSpre = eqS;
@@ -93,11 +98,13 @@ function run() {
     topL: cumTopL, topS: cumTopS, callsL, callsS, firstCallL, firstCallS,
     irrL: ann(irrMonthly(cfL)), irrS: ann(irrMonthly(cfS)), ddL: maxDD(cum), ddS: maxDD(cum.map(v => -v))
   });
-  renderCharts(rows, IM);
+  renderCharts(rows, IM, P0);
   renderTable(rows, MM);
   document.getElementById("results").style.display = "";
   const Pn = pts[pts.length-1].p, dPts = Pn - P0;
-  status.textContent = `${rows.length-1} months · enter ${monthLabel(entry)} → settles ${monthLabel(exit)} · rate ${P0.toFixed(2)} → ${Pn.toFixed(2)} (${dPts>=0?"+":""}${dPts.toFixed(2)} pts)`;
+  const strikeLbl = customStrike ? `strike ${P0.toFixed(2)}` : `spot ${P0.toFixed(2)}`;
+  status.textContent = `${rows.length-1} months · enter ${monthLabel(entry)} → settles ${monthLabel(exit)} · ` +
+    `${strikeLbl} → settled ${Pn.toFixed(2)} (${dPts>=0?"+":""}${dPts.toFixed(2)} pts)`;
 }
 
 function renderMetrics(o) {
@@ -125,12 +132,13 @@ function renderMetrics(o) {
   n.innerHTML = shared;
 }
 
-function renderCharts(rows, IM) {
+function renderCharts(rows, IM, strike) {
   const labels = rows.map(r => monthLabel(r.ym));
   if (mainChart) mainChart.destroy(); if (marginChart) marginChart.destroy();
   mainChart = new Chart(document.getElementById("cMain"), {
     data: {labels, datasets: [
       {type:"line", label:"Underlying rate", data: rows.map(r => r.p), borderColor: C.muted, borderWidth: 2, pointRadius: 0, yAxisID: "y1", tension: .2},
+      {type:"line", label:"Entry rate (strike)", data: rows.map(() => strike), borderColor: C.amber, borderWidth: 1, borderDash:[5,4], pointRadius: 0, yAxisID: "y1"},
       {type:"line", label:"Long cumulative PnL", data: rows.map(r => r.cumPnlL), borderColor: C.green, borderWidth: 2, pointRadius: 0, tension: .2},
       {type:"line", label:"Short cumulative PnL", data: rows.map(r => -r.cumPnlL), borderColor: C.accent, borderWidth: 2, pointRadius: 0, tension: .2},
     ]},

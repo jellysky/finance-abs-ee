@@ -8,7 +8,7 @@
 <style>
   .wrap{max-width:1380px} .chart-box{height:380px} table.dt th,table.dt td{padding:8px 14px}
   /* keep all backtest inputs on a single row */
-  .form-grid{grid-template-columns:repeat(8,minmax(0,1fr));gap:9px;align-items:end}
+  .form-grid{grid-template-columns:repeat(9,minmax(0,1fr));gap:9px;align-items:end}
   .form-grid>div{min-width:0}
   .form-grid label.fld{font-size:9.5px;letter-spacing:.2px;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .form-grid input,.form-grid select{font-size:12px;padding:7px 8px}
@@ -33,11 +33,13 @@
 
 <main class="wrap">
   <div class="phead"><h1>Backtest a Net-Loss Future</h1></div>
-  <p class="note">Models a <b>dated, cash-settled future</b>: you enter at the entry month's rate and the contract
+  <p class="note">Models a <b>dated, cash-settled future</b>: you enter at a rate you choose — your
+     <b>entry rate (strike)</b>, or leave it blank to use the index's spot at the entry month — and the contract
      <b>settles in arrears to the realized print</b> at the settlement month. The payoff is <b>linear in the rate</b> —
      <b>PnL = side × notional × (rate<sub>settle</sub> − rate<sub>entry</sub>) / 100</b> — so one point (1% on the rate)
      equals 1% of notional (DV01-style). <b>Long profits when losses rise</b> (hedging an ABS book); short is the mirror.
-     Marked to market monthly with variation margin settled to cash. Historical, illustrative only — not a forecast or investment advice.</p>
+     Interim months mark to the realized index (no forward curve); settlement is the realized print. Historical,
+     illustrative only — not a forecast or investment advice.</p>
 
   <div class="tool">
     <div class="form-grid">
@@ -52,6 +54,7 @@
         </select></div>
       <div><label class="fld">Entry month</label><input type="month" id="entry"></div>
       <div><label class="fld">Settlement month</label><input type="month" id="exit"></div>
+      <div><label class="fld" title="Strike you enter at; blank = the index's spot at the entry month">Entry rate %</label><input type="number" id="entryrate" step="0.01" placeholder="spot"></div>
       <div><label class="fld">Notional (USDC)</label><input type="number" id="notional" value="100000" min="1" step="1000"></div>
       <div><label class="fld">Init. margin %</label><input type="number" id="im" value="20" min="1" max="100" step="1"></div>
       <div><label class="fld">Maint. margin %</label><input type="number" id="mm" value="10" min="0" max="100" step="1"></div>
