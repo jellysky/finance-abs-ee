@@ -12,7 +12,7 @@
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
 h1,h2,h3,h4,h5,h6{font-family:var(--head)}
 a{color:inherit;text-decoration:none}
-.wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+.wrap{max-width:1340px;margin:0 auto;padding:0 22px}
 header.site{position:sticky;top:0;z-index:10;backdrop-filter:blur(8px);background:rgba(23,8,54,.85);border-bottom:1px solid var(--border)}
 header.site .wrap{display:flex;align-items:center;justify-content:space-between;height:62px}
 .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.3px}
