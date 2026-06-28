@@ -38,13 +38,20 @@ function render(d) {
   document.getElementById("asof").textContent =
     `${d.ticker ? d.ticker + " · " : ""}as of ${fmtMonth(L.as_of)}` + (L.first ? ` · history from ${fmtMonth(L.first)}` : "");
 
+  const mo = v => v != null ? v.toFixed(0) + " mo" : "—";
+  const lossSeries = d.series.map(s => s.net_loss).filter(v => v != null);
+  const peakLoss = lossSeries.length ? Math.max(...lossSeries) : null;
+  const seasoning = (L.orig_term != null && L.rem_term != null) ? L.orig_term - L.rem_term : null;
   const kpis = [
     ["30+ DPD", pct(L.delq30)], ["60+ DPD", pct(L.delq60)],
-    ["Net loss (ann.)", pct(L.net_loss)], ["Recovery", pct(L.recovery)],
+    ["Net loss (ann.)", pct(L.net_loss)], ["Peak net loss", pct(peakLoss)],
+    ["Recovery", pct(L.recovery)],
     ["Constituent deals", L.n_deals ?? "—"], ["Avg FICO", L.fico ?? "—"],
     ["Borrowers", L.borrowers != null ? L.borrowers.toLocaleString() : "—"],
-    ["Avg loan term", L.orig_term != null ? L.orig_term.toFixed(0) + " mo" : "—"],
-    ["Realized WAL", L.realized_wal != null ? L.realized_wal.toFixed(0) + " mo" : "—"],
+    ["Avg loan term", mo(L.orig_term)], ["Avg remaining term", mo(L.rem_term)],
+    ["Avg seasoning", mo(seasoning)],
+    ["Scheduled WAL", mo(L.sched_wal)], ["Realized WAL", mo(L.realized_wal)],
+    ["Months of history", d.series.length],
   ];
   document.getElementById("kpis").innerHTML = kpis.map(([l,v]) =>
     `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
