@@ -75,10 +75,12 @@ module.exports = async function handler(req, res) {
     });
     if (!er.ok) {
       const detail = await er.text().catch(() => "");
+      console.error("Resend send failed:", er.status, detail);
       return res.status(502).json({ ok: false, error: "Could not send the message.", detail });
     }
-  } catch {
-    return res.status(502).json({ ok: false, error: "Could not send the message. Try again." });
+  } catch (e) {
+    console.error("Resend request threw:", e);
+    return res.status(502).json({ ok: false, error: "Could not send the message. Try again.", detail: String(e && e.message || e) });
   }
 
   return res.status(200).json({ ok: true });
