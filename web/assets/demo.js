@@ -37,6 +37,7 @@ const sideName = s => s > 0 ? "Long" : "Short";
 function newChart() {
   if (chart) chart.destroy();
   chart = new Chart($("cBet"), {
+    type: "line",
     data: { labels: [], datasets: [
       { label: "Net-loss index %", data: [], yAxisID: "y1", borderColor: C.muted, borderWidth: 2,
         tension: .2, pointRadius: ctx => ctx.dataIndex === ctx.dataset.data.length - 1 ? 5 : 0,
