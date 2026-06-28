@@ -29,8 +29,7 @@ form.addEventListener("submit", async (e) => {
       setNote("Thanks — your message was sent. We'll be in touch.", true);
       form.reset();
     } else {
-      const base = data.error || "Sorry, something went wrong. Please try again or email peter@serention.com.";
-      setNote(base + (data.detail ? " — " + data.detail : ""), false);
+      setNote(data.error || "Sorry, something went wrong. Please try again or email peter@serention.com.", false);
     }
   } catch (_) {
     setNote("Network error. Please try again or email peter@serention.com.", false);
