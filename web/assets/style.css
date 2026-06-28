@@ -106,13 +106,15 @@ table.dt tr:last-child td{border-bottom:none}
 .wallet{font-family:var(--mono);font-size:13px;color:var(--muted)}
 .statusline{font-size:13px;color:var(--muted);margin:10px 0;min-height:18px}
 
-/* nav dropdown (Products menu) */
+/* nav dropdown (Products menu) — click to toggle, stays open until reclick/navigate */
 nav .menu{position:relative;display:inline-block;margin-left:20px}
-nav .menu>a{margin-left:0;cursor:pointer}
+nav .menu>summary{list-style:none;cursor:pointer;color:var(--muted);font-size:14px;user-select:none}
+nav .menu>summary::-webkit-details-marker{display:none}
+nav .menu>summary:hover,nav .menu[open]>summary{color:var(--ink)}
 nav .menu .dropdown{position:absolute;right:0;top:100%;margin-top:10px;background:var(--panel);
   border:1px solid var(--border);border-radius:12px;padding:8px;min-width:220px;display:none;
   flex-direction:column;box-shadow:0 14px 34px rgba(0,0,0,.4);z-index:20}
-nav .menu:hover .dropdown,nav .menu:focus-within .dropdown{display:flex}
+nav .menu[open] .dropdown{display:flex}
 nav .dropdown a{margin:0;padding:9px 12px;border-radius:8px;font-size:14px;white-space:nowrap}
 nav .dropdown a:hover{background:var(--panel2);color:var(--ink)}
 
