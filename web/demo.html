@@ -3,19 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Serention — Live trade demo</title>
+<title>Serention — Demo: bet every mark</title>
 <link rel="stylesheet" href="assets/style.css">
 <style>
-  .traders{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0}
-  .trader{border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--panel)}
-  .trader.long{border-top:3px solid var(--good)} .trader.short{border-top:3px solid var(--accent)}
-  .trader h3{margin:0 0 4px;font-size:16px} .trader .who{color:var(--muted);font-size:13px;margin-bottom:10px}
-  .trader .r{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid var(--border)}
-  .trader .r:last-child{border:none} .trader .r .v{font-family:var(--mono)}
-  .big{font-size:24px;font-weight:700;font-family:var(--mono)}
+  .chart-box{height:380px}
+  .betnow{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border:1px solid var(--border);
+    border-radius:12px;overflow:hidden;margin:14px 0}
+  .betnow .cell{padding:12px 14px;border-right:1px solid var(--border)}
+  .betnow .cell:last-child{border-right:none}
+  .betnow .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .betnow .v{font-family:var(--mono);font-size:20px;font-weight:700;margin-top:4px}
+  .badge{display:inline-block;font-weight:700;font-size:13px;padding:3px 10px;border-radius:999px}
+  .badge.win{background:rgba(34,197,94,.16);color:var(--good)}
+  .badge.loss{background:rgba(255,92,92,.16);color:var(--neg)}
+  .badge.flat{background:rgba(201,184,242,.14);color:var(--muted)}
   .monthflag{font-family:var(--mono);font-size:15px;color:var(--accent2)}
-  .liq{color:var(--accent);font-weight:700}
-  @media(max-width:640px){.traders{grid-template-columns:1fr}}
+  #ledger{max-height:280px}
+  .ctrlrow .form-grid{grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;align-items:end}
+  @media(max-width:760px){.ctrlrow .form-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -34,61 +39,64 @@
 </div></header>
 
 <main class="wrap">
-  <div class="phead"><h1>Live trade demo</h1><span class="monthflag" id="monthflag"></span></div>
-  <p class="note">Watch a margined trade on the Auto Subprime Credit Index play out month by month over real history, then see how a subprime-auto lender uses the same index to hedge. Test USDC; illustrative only.</p>
+  <div class="phead"><h1>Demo — bet every mark in the index history</h1><span class="monthflag" id="monthflag"></span></div>
+  <p class="note">Walk through the whole index, one month at a time. At <b>each monthly mark</b> you open a
+     <b>one-month Net-Loss Future</b> — enter at this month's net-loss rate, settle to <b>next month's realized
+     print</b>. Each bet pays <b>side × notional × (settle − entry) / 100</b> (1 point = 1% of notional). Press play
+     and watch a strategy bet <b>all ~112 marks</b> in sequence, with PnL accumulating. Illustrative, historical only.</p>
 
-  <div class="tool">
+  <div class="tool ctrlrow">
     <div class="form-grid">
-      <div><label class="fld">Underlying</label><select id="series">
-        <option value="delq30">30+ DPD rate (%)</option><option value="delq60">60+ DPD rate (%)</option><option value="net_loss">Net loss rate (%)</option></select></div>
-      <div><label class="fld">Entry month</label><input type="month" id="entry"></div>
-      <div><label class="fld">Exit month</label><input type="month" id="exit"></div>
-      <div><label class="fld">Notional each (USDC)</label><input type="number" id="notional" value="100000" step="10000"></div>
-      <div><label class="fld">Leverage</label><select id="lev">
-        <option value="1">1× (fully collateralized)</option><option value="2">2×</option><option value="5">5×</option></select></div>
-      <div><label class="fld">Speed</label><select id="speed"><option value="650">Normal</option><option value="300">Fast</option><option value="1100">Slow</option></select></div>
-      <div><button id="run">▶ Simulate trade</button></div>
-      <div><button id="reset" class="ghost">Reset</button></div>
+      <div><label class="fld">Strategy</label><select id="strategy">
+        <option value="long">Always long (losses rise)</option>
+        <option value="short">Always short (losses fall)</option>
+        <option value="momentum">Momentum (follow last move)</option>
+        <option value="contrarian">Contrarian (fade last move)</option>
+      </select></div>
+      <div><label class="fld">Bet notional (USDC)</label><input type="number" id="bet" value="100000" step="10000" min="1"></div>
+      <div><label class="fld">Speed</label><select id="speed">
+        <option value="450">Normal</option><option value="180">Fast</option><option value="80">Turbo</option><option value="900">Slow</option>
+      </select></div>
+      <div><button id="run">▶ Play</button></div>
+      <div><button id="pause" class="ghost">❚❚ Pause</button></div>
+      <div><button id="step" class="ghost">→ Step</button></div>
+      <div><button id="reset" class="ghost">↺ Reset</button></div>
     </div>
     <div class="statusline" id="status"></div>
   </div>
 
-  <h2 class="section-title">Part 1 — Two traders, opposite views</h2>
-  <div class="traders">
-    <div class="trader long"><h3>📈 Long Larry</h3><div class="who">Believes subprime credit will deteriorate (index ↑)</div>
-      <div class="r"><span>PnL</span><span class="v big" id="lPnl">—</span></div>
-      <div class="r"><span>Initial margin</span><span class="v" id="lIM">—</span></div>
-      <div class="r"><span>Maintenance margin</span><span class="v" id="lMM">—</span></div>
-      <div class="r"><span>Account equity</span><span class="v" id="lEq">—</span></div>
-      <div class="r"><span>Status</span><span class="v" id="lStat">—</span></div></div>
-    <div class="trader short"><h3>📉 Short Sarah</h3><div class="who">Believes credit will improve / hold (index ↓)</div>
-      <div class="r"><span>PnL</span><span class="v big" id="sPnl">—</span></div>
-      <div class="r"><span>Initial margin</span><span class="v" id="sIM">—</span></div>
-      <div class="r"><span>Maintenance margin</span><span class="v" id="sMM">—</span></div>
-      <div class="r"><span>Account equity</span><span class="v" id="sEq">—</span></div>
-      <div class="r"><span>Status</span><span class="v" id="sStat">—</span></div></div>
+  <!-- this month's bet -->
+  <div class="betnow">
+    <div class="cell"><div class="l">Month</div><div class="v" id="tbMonth">—</div></div>
+    <div class="cell"><div class="l">Side</div><div class="v" id="tbSide">—</div></div>
+    <div class="cell"><div class="l">Entry → Settle</div><div class="v" id="tbES">—</div></div>
+    <div class="cell"><div class="l">Move</div><div class="v" id="tbMove">—</div></div>
+    <div class="cell"><div class="l">This bet PnL</div><div class="v" id="tbPnl">—</div></div>
+    <div class="cell"><div class="l">Result</div><div class="v"><span class="badge flat" id="tbBadge">—</span></div></div>
   </div>
-  <div class="chart-card"><h2>Index level &amp; each trader's equity</h2><div class="chart-box"><canvas id="cTrade"></canvas></div></div>
 
-  <h2 class="section-title">Part 2 — How a subprime-auto lender hedges</h2>
-  <p class="note">A lender holds a pool of subprime auto loans and bleeds value as the pool's <b>actual net losses</b> accrue — charge-offs net of recoveries, straight from the loan tapes (no model). It hedges by going <b>long the index</b>. This shows how the index offsets <i>realized</i> credit losses, which is the economic case for the product.</p>
-  <div class="tool"><div class="form-grid">
-    <div><label class="fld">Pool value (USD)</label><input type="number" id="pool" value="10000000" step="1000000"></div>
-    <div><label class="fld">Hedge notional</label><input type="number" id="hr" value="40" step="5" min="0" max="150"><span class="sub">% of pool, long the index</span></div>
-  </div></div>
+  <!-- running scoreboard -->
+  <h2 class="kpi-head">Scoreboard</h2>
   <div class="kpis">
-    <div class="kpi"><div class="l">Portfolio — unhedged</div><div class="v" id="pUn">—</div></div>
-    <div class="kpi"><div class="l">Realized credit loss</div><div class="v" id="pSaved">—</div></div>
-    <div class="kpi"><div class="l">Hedge gain (long index)</div><div class="v" id="pHedge">—</div></div>
-    <div class="kpi"><div class="l">Portfolio — hedged</div><div class="v" id="pNet">—</div></div>
+    <div class="kpi"><div class="l">Cumulative PnL</div><div class="v" id="scCum">—</div></div>
+    <div class="kpi"><div class="l">Bets placed</div><div class="v" id="scBets">—</div></div>
+    <div class="kpi"><div class="l">Win rate</div><div class="v" id="scWr">—</div></div>
+    <div class="kpi"><div class="l">Current streak</div><div class="v" id="scStreak">—</div></div>
+    <div class="kpi"><div class="l">Best month</div><div class="v" id="scBest">—</div></div>
+    <div class="kpi"><div class="l">Worst month</div><div class="v" id="scWorst">—</div></div>
   </div>
-  <div class="chart-card"><h2>Portfolio value: unhedged vs hedged (driven by real pool losses)</h2><div class="chart-box"><canvas id="cHedge"></canvas></div></div>
 
-  <div class="methodology" id="results" style="display:none"></div>
-  <a class="backlink" href="backtest.html">← Full backtest tool</a>
+  <div class="chart-card"><h2>Index path &amp; cumulative PnL</h2>
+    <p class="sub">Net-loss index (right axis) with a marker on the month being bet; cumulative PnL (left axis) builds as each bet settles.</p>
+    <div class="chart-box"><canvas id="cBet"></canvas></div></div>
+
+  <div class="chart-card"><h2>Bet ledger</h2>
+    <div class="table-wrap" id="ledger"></div></div>
+
+  <a class="backlink" href="backtest.html">← Try the full backtest tool</a>
 </main>
 
-<footer class="site"><div class="wrap"><div>© Serention</div><div>Illustrative demo · test data</div></div></footer>
+<footer class="site"><div class="wrap"><div>© Serention</div><div>Illustrative demo · historical data</div></div></footer>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="assets/demo.js"></script>

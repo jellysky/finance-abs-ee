@@ -1,140 +1,153 @@
-// Animated two-party trade + hedging demo on a Serention index (client-side).
-Chart.defaults.color = "#8a97a8"; Chart.defaults.borderColor = "#1f2733";
-const C = {accent:"#e23b4e", green:"#22c55e", blue:"#3b82f6", muted:"#8a97a8", amber:"#f59e0b"};
+// Demo: bet every monthly mark in the index history with a one-month Net-Loss Future.
+// At month t you open at NLI_t and settle to next month's realized print NLI_{t+1}.
+// PnL_t = side * notional * (NLI_{t+1} - NLI_t) / 100. Step chronologically through all marks.
+Chart.defaults.color = "#c9b8f2"; Chart.defaults.borderColor = "rgba(201,184,242,0.18)";
+const C = {accent:"#14b8c4", green:"#22c55e", neg:"#ff5c5c", amber:"#f59e0b", muted:"#c9b8f2", blue:"#3b82f6"};
+
+let SERIES = [], chart = null, timer = null, i = 0, state = null;
+
 const $ = id => document.getElementById(id);
-
-let SERIES = [], anim = null, tradeChart, hedgeChart, MODEL = null;
-
 const fmt$ = v => (v < 0 ? "-$" : "$") + Math.abs(Math.round(v)).toLocaleString();
-const fmtM = v => (v < 0 ? "-$" : "$") + (Math.abs(v) / 1e6).toFixed(2) + "M";
-const mlabel = ym => { const [y, m] = ym.split("-"); return ["", "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m] + " " + y; };
-const cl = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+const MON = ["", "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const monthLabel = ym => { const [y, m] = ym.split("-"); return MON[+m] + " " + y; };
+const ym = idx => SERIES[idx].date.slice(0, 7);
+const ptsTxt = n => (n >= 0 ? "+" : "") + n.toFixed(2) + " pts";
 
-fetch("data/auto-subprime.json").then(r => r.json()).then(d => {
-  SERIES = d.series;
-  const lo = SERIES[0].date.slice(0, 7), hi = SERIES[SERIES.length - 1].date.slice(0, 7);
-  ["entry", "exit"].forEach(id => { $(id).min = lo; $(id).max = hi; });
-  $("entry").value = "2024-01"; $("exit").value = hi;
-  $("run").onclick = run; $("reset").onclick = reset;
-});
-
-function compute() {
-  const field = $("series").value, entry = $("entry").value, exit = $("exit").value;
-  const notional = +$("notional").value, lev = +$("lev").value;
-  const V0 = +$("pool").value, hr = +$("hr").value / 100;
-  const pts = SERIES.filter(s => s.date.slice(0,7) >= entry && s.date.slice(0,7) <= exit && s[field] != null)
-                    .map(s => ({ym: s.date.slice(0,7), p: s[field], nl: s.net_loss}));
-  if (pts.length < 2) return null;
-  const P0 = pts[0].p, im = notional / lev, maint = notional * 0.10;
-  const hedgeNotional = hr * V0;          // long index notional
-  // Maintenance model (Part 1) + real-loss hedge (Part 2).
-  let eqL = im, eqS = im, cumTopL = 0, cumTopS = 0, callsL = 0, callsS = 0, firstCallL = null, firstCallS = null, prev = P0, cumLoss = 0;
-  const rows = pts.map((pt, i) => {
-    const ret = (pt.p - P0) / P0;
-    const mtm = i === 0 ? 0 : notional * (pt.p - prev) / P0; prev = pt.p;
-    eqL += mtm; eqS += -mtm;
-    let topL = 0, topS = 0;
-    if (i > 0 && eqL < maint) { topL = im - eqL; eqL = im; cumTopL += topL; callsL++; if (!firstCallL) firstCallL = pt.ym; }
-    if (i > 0 && eqS < maint) { topS = im - eqS; eqS = im; cumTopS += topS; callsS++; if (!firstCallS) firstCallS = pt.ym; }
-    // Part 2: portfolio bleeds the pool's ACTUAL realized net loss each month.
-    if (i > 0) cumLoss += V0 * ((pt.nl || 0) / 12 / 100);   // net_loss is annualized %
-    const hedge = hedgeNotional * ret;
-    return {ym: pt.ym, p: pt.p, ret, lPnl: notional * ret, sPnl: -notional * ret,
-            lEq: eqL, sEq: eqS, topL, topS, cumTopL, cumTopS,
-            cumLoss, hedge, unhedged: V0 - cumLoss, net: V0 - cumLoss + hedge};
-  });
-  return {rows, im, maint, notional, V0, callsL, callsS, firstCallL, firstCallS, field, lev};
-}
-
-function run() {
+fetch("data/nli.json").then(r => r.json()).then(d => {
+  SERIES = d.series.filter(s => s.nli != null);
+  $("run").onclick = play;
+  $("pause").onclick = pause;
+  $("step").onclick = () => { pause(); stepOnce(); };
+  $("reset").onclick = reset;
+  $("strategy").onchange = reset;
+  $("bet").onchange = reset;
   reset();
-  MODEL = compute();
-  if (!MODEL) { $("status").textContent = "Not enough data in that window."; return; }
-  const {rows} = MODEL;
-  $("lIM").textContent = $("sIM").textContent = fmt$(MODEL.im);
-  $("lMM").textContent = $("sMM").textContent = fmt$(MODEL.maint);
-  buildCharts(rows);
-  let i = 0, speed = +$("speed").value;
-  $("run").disabled = true;
-  step(0);
-  anim = setInterval(() => {
-    i++;
-    if (i >= rows.length) { clearInterval(anim); anim = null; $("run").disabled = false; finish(); return; }
-    step(i);
-  }, speed);
-}
+}).catch(() => { $("status").textContent = "Could not load index data (data/nli.json)."; });
 
-function step(i) {
-  const r = MODEL.rows[i];
-  $("monthflag").textContent = mlabel(r.ym) + "  ·  index " + r.p.toFixed(1);
-  // traders
-  setTrader("l", r.lPnl, r.lEq, r.topL, r.cumTopL);
-  setTrader("s", r.sPnl, r.sEq, r.topS, r.cumTopS);
-  // hedge
-  $("pUn").textContent = fmtM(r.unhedged);
-  $("pSaved").innerHTML = `<span class="neg">${fmtM(r.cumLoss)}</span>`;
-  $("pHedge").innerHTML = `<span class="${cl(r.hedge)}">${fmtM(r.hedge)}</span>`;
-  $("pNet").textContent = fmtM(r.net);
-  // advance charts
-  const sl = (a) => MODEL.rows.slice(0, i + 1).map(a);
-  tradeChart.data.labels = sl(x => mlabel(x.ym));
-  tradeChart.data.datasets[0].data = sl(x => x.p);
-  tradeChart.data.datasets[1].data = sl(x => x.lEq);
-  tradeChart.data.datasets[2].data = sl(x => x.sEq);
-  tradeChart.data.datasets[3].data = sl(() => MODEL.im);
-  tradeChart.data.datasets[4].data = sl(() => MODEL.maint);
-  tradeChart.update("none");
-  hedgeChart.data.labels = sl(x => mlabel(x.ym));
-  hedgeChart.data.datasets[0].data = sl(x => x.unhedged);
-  hedgeChart.data.datasets[1].data = sl(x => x.net);
-  hedgeChart.update("none");
+// +1 long / -1 short, per the selected strategy
+function sideFor(t) {
+  const s = $("strategy").value;
+  if (s === "long") return 1;
+  if (s === "short") return -1;
+  const mv = t === 0 ? 1 : (Math.sign(SERIES[t].nli - SERIES[t - 1].nli) || 1);
+  return s === "momentum" ? mv : -mv;   // contrarian = fade
 }
+const sideName = s => s > 0 ? "Long" : "Short";
 
-function setTrader(k, pnl, eq, topThis, cumTop) {
-  $(k + "Pnl").innerHTML = `<span class="${cl(pnl)}">${fmt$(pnl)}</span>`;
-  $(k + "Eq").textContent = fmt$(eq);
-  $(k + "Stat").innerHTML = topThis > 0
-    ? `<span class="liq">⚠ Margin call — top up ${fmt$(topThis)}</span>`
-    : (cumTop > 0 ? `<span style="color:#f59e0b">Open · topped up ${fmt$(cumTop)}</span>`
-                  : `<span class="pos">Open</span>`);
-}
-
-function buildCharts(rows) {
-  const opts = (yT, extra) => ({responsive:true, maintainAspectRatio:false, animation:false,
-    interaction:{mode:"index",intersect:false}, plugins:{legend:{labels:{boxWidth:12,usePointStyle:true,padding:12}}},
-    scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,autoSkip:true}}, y:{title:{display:true,text:yT},grid:{color:"#161d28"}}, ...extra}});
-  const ds = (label, color, axis, dash) => ({label, data:[], borderColor:color, backgroundColor:color, borderWidth:2, pointRadius:0, tension:.2, yAxisID:axis||"y", borderDash:dash||[]});
-  if (tradeChart) tradeChart.destroy(); if (hedgeChart) hedgeChart.destroy();
-  tradeChart = new Chart($("cTrade"), {type:"line", data:{labels:[], datasets:[
-    ds("Index level", C.muted, "y1"), ds("Long Larry equity", C.green), ds("Short Sarah equity", C.accent),
-    ds("Initial margin", C.blue, "y", [6,4]), ds("Maintenance margin (call below)", C.amber, "y", [3,3])]},
-    options: opts("Account equity ($)", {y1:{position:"right",title:{display:true,text:"Index"},grid:{drawOnChartArea:false}}})});
-  hedgeChart = new Chart($("cHedge"), {type:"line", data:{labels:[], datasets:[
-    ds("Portfolio value — unhedged", C.accent), ds("Portfolio value — hedged", C.green)]},
-    options: opts("Portfolio value ($)", {})});
-}
-
-function finish() {
-  const rows = MODEL.rows, r = rows[rows.length - 1];
-  const line = (name, color, pnl, calls, cumTop, firstCall) => {
-    const cap = MODEL.im + cumTop, roc = (pnl / cap * 100).toFixed(0) + "% on capital";
-    const calltxt = calls > 0
-      ? ` — <span class="liq">${calls} margin call${calls > 1 ? "s" : ""}, topped up ${fmt$(cumTop)}</span> to stay in (else liquidated ${mlabel(firstCall)})`
-      : " — no margin calls";
-    return `<br>· <b style="color:${color}">${name}</b>: PnL ${fmt$(pnl)}, ${roc}${calltxt}.`;
-  };
-  const loss = r.cumLoss, gain = r.hedge, offset = loss > 0 ? gain / loss * 100 : 0;
-  $("results").style.display = "";
-  $("results").innerHTML = `<b>Result over ${rows.length - 1} months.</b> Index moved <b>${(r.ret * 100).toFixed(0)}%</b> (${MODEL.field}).
-    ${line("Long Larry", "#22c55e", r.lPnl, MODEL.callsL, r.cumTopL, MODEL.firstCallL)}
-    ${line("Short Sarah", "#e23b4e", r.sPnl, MODEL.callsS, r.cumTopS, MODEL.firstCallS)}
-    <br>· <b>Hedger</b>: the ${fmtM(MODEL.V0)} pool realized <b style="color:#e23b4e">${fmtM(loss)}</b> of actual net credit losses; the long-index hedge gained <b style="color:#22c55e">${fmtM(gain)}</b>, offsetting <b>${offset.toFixed(0)}%</b>. Unhedged value fell to ${fmtM(r.unhedged)}; hedged it held at <b>${fmtM(r.net)}</b>.`;
-  $("status").textContent = "Done. Adjust inputs and run again.";
+function newChart() {
+  if (chart) chart.destroy();
+  chart = new Chart($("cBet"), {
+    data: { labels: [], datasets: [
+      { label: "Net-loss index %", data: [], yAxisID: "y1", borderColor: C.muted, borderWidth: 2,
+        tension: .2, pointRadius: ctx => ctx.dataIndex === ctx.dataset.data.length - 1 ? 5 : 0,
+        pointBackgroundColor: C.amber, pointBorderColor: C.amber },
+      { label: "Cumulative PnL", data: [], yAxisID: "y", borderColor: C.green, borderWidth: 2,
+        tension: .2, pointRadius: 0, fill: true, backgroundColor: "rgba(34,197,94,.08)" },
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { boxWidth: 12, usePointStyle: true, padding: 12 } } },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 12, autoSkip: true } },
+        y: { position: "left", title: { display: true, text: "Cumulative PnL ($)" }, grid: { color: "rgba(201,184,242,0.14)" } },
+        y1: { position: "right", title: { display: true, text: "Index (%)" }, grid: { drawOnChartArea: false } },
+      } },
+  });
 }
 
 function reset() {
-  if (anim) { clearInterval(anim); anim = null; }
-  $("run").disabled = false; $("results").style.display = "none"; $("monthflag").textContent = "";
-  ["lPnl","lIM","lMM","lEq","lStat","sPnl","sIM","sMM","sEq","sStat","pUn","pHedge","pNet","pSaved"].forEach(id => $(id).textContent = "—");
-  $("status").textContent = "";
+  pause();
+  i = 0;
+  state = { cum: 0, bets: 0, wins: 0, streak: 0, best: {p: -Infinity}, worst: {p: Infinity} };
+  newChart();
+  renderScoreboard();
+  renderThisBet(null);
+  $("ledger").innerHTML = `<table class="dt"><thead><tr><th>Month</th><th>Side</th><th>Entry</th>
+    <th>Settle</th><th>Move</th><th>PnL</th><th>Cumulative</th></tr></thead><tbody id="ledgerBody"></tbody></table>`;
+  $("monthflag").textContent = "";
+  $("status").textContent = `Ready — ${SERIES.length - 1} monthly bets from ${monthLabel(ym(0))} to ${monthLabel(ym(SERIES.length - 1))}. Press play.`;
+  $("run").disabled = false;
+}
+
+function play() {
+  if (timer) return;
+  if (i >= SERIES.length - 1) reset();
+  timer = setInterval(stepOnce, +$("speed").value);
+  $("run").disabled = true;
+}
+function pause() { clearInterval(timer); timer = null; $("run").disabled = false; }
+
+function stepOnce() {
+  if (i >= SERIES.length - 1) { pause(); finish(); return; }
+  const notional = +$("bet").value || 100000;
+  const entry = SERIES[i].nli, settle = SERIES[i + 1].nli, side = sideFor(i);
+  const move = settle - entry;
+  const pnl = side * notional * move / 100;
+
+  state.cum += pnl; state.bets++;
+  const win = pnl > 0, flat = pnl === 0;
+  if (win) state.wins++;
+  state.streak = win ? (state.streak >= 0 ? state.streak + 1 : 1)
+                     : flat ? 0 : (state.streak <= 0 ? state.streak - 1 : -1);
+  if (pnl > state.best.p) state.best = { p: pnl, ym: ym(i) };
+  if (pnl < state.worst.p) state.worst = { p: pnl, ym: ym(i) };
+
+  // grow the chart
+  chart.data.labels.push(monthLabel(ym(i)));
+  chart.data.datasets[0].data.push(entry);
+  chart.data.datasets[1].data.push(state.cum);
+  chart.update("none");
+
+  renderScoreboard();
+  renderThisBet({ ym: ym(i), entry, settle, side, move, pnl, win, flat });
+  addLedger({ ym: ym(i), side, entry, settle, move, pnl, cum: state.cum, win, flat });
+  $("monthflag").textContent = `${monthLabel(ym(i))} → settles ${monthLabel(ym(i + 1))}`;
+
+  i++;
+  if (i >= SERIES.length - 1) { pause(); finish(); }
+}
+
+function renderThisBet(b) {
+  if (!b) {
+    ["tbMonth","tbSide","tbES","tbMove","tbPnl"].forEach(id => $(id).textContent = "—");
+    const bd = $("tbBadge"); bd.textContent = "—"; bd.className = "badge flat";
+    return;
+  }
+  $("tbMonth").textContent = monthLabel(b.ym);
+  $("tbSide").textContent = sideName(b.side);
+  $("tbES").textContent = `${b.entry.toFixed(2)} → ${b.settle.toFixed(2)}`;
+  $("tbMove").textContent = ptsTxt(b.move);
+  const pnlEl = $("tbPnl");
+  pnlEl.textContent = fmt$(b.pnl);
+  pnlEl.className = "v " + (b.win ? "pos" : b.flat ? "" : "neg");
+  const bd = $("tbBadge");
+  bd.textContent = b.flat ? "FLAT" : b.win ? "WIN" : "LOSS";
+  bd.className = "badge " + (b.flat ? "flat" : b.win ? "win" : "loss");
+}
+
+function renderScoreboard() {
+  const s = state;
+  const cumEl = $("scCum"); cumEl.textContent = fmt$(s.cum);
+  cumEl.className = "v " + (s.cum > 0 ? "pos" : s.cum < 0 ? "neg" : "");
+  $("scBets").textContent = s.bets;
+  $("scWr").textContent = s.bets ? Math.round(100 * s.wins / s.bets) + "%" : "—";
+  $("scStreak").textContent = s.streak === 0 ? "—" : (s.streak > 0 ? "W" + s.streak : "L" + (-s.streak));
+  $("scBest").textContent = s.best.ym ? `${fmt$(s.best.p)} · ${monthLabel(s.best.ym)}` : "—";
+  $("scWorst").textContent = s.worst.ym ? `${fmt$(s.worst.p)} · ${monthLabel(s.worst.ym)}` : "—";
+}
+
+function addLedger(b) {
+  const cls = b.win ? "pos" : b.flat ? "" : "neg";
+  const row = `<tr><td>${monthLabel(b.ym)}</td><td>${sideName(b.side)}</td><td>${b.entry.toFixed(2)}</td>
+    <td>${b.settle.toFixed(2)}</td><td class="${cls}">${ptsTxt(b.move * b.side)}</td>
+    <td class="${cls}">${fmt$(b.pnl)}</td><td>${fmt$(b.cum)}</td></tr>`;
+  $("ledgerBody").insertAdjacentHTML("afterbegin", row);   // newest on top
+}
+
+function finish() {
+  const s = state;
+  const wr = s.bets ? Math.round(100 * s.wins / s.bets) : 0;
+  $("status").textContent = `Done — bet all ${s.bets} marks (${monthLabel(ym(0))} → ${monthLabel(ym(SERIES.length - 1))}). ` +
+    `Win rate ${wr}%. Cumulative PnL ${fmt$(s.cum)} on ${fmt$(+$("bet").value || 100000)} per bet. ` +
+    `Best ${fmt$(s.best.p)} (${monthLabel(s.best.ym)}), worst ${fmt$(s.worst.p)} (${monthLabel(s.worst.ym)}).`;
 }
