@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Serention — Auto Subprime Loss Index</title>
 <link rel="stylesheet" href="assets/style.css">
+<style>
+  .wrap{max-width:1340px}
+  /* calculation example: wrap long rows so figures are never clipped */
+  table.dt.calc{table-layout:fixed;width:100%}
+  table.dt.calc td{white-space:normal;word-break:break-word}
+  table.dt.calc td:first-child{width:56%}
+  table.dt.calc td:last-child{text-align:right}
+</style>
 </head>
 <body>
 <header class="site"><div class="wrap">
@@ -97,7 +105,7 @@
       <h2>Calculation example — one monthly print</h2>
       <p class="sub">Illustrative figures, tracing a month's print through to a future's payoff.</p>
       <div class="table-wrap">
-        <table class="dt">
+        <table class="dt calc">
           <tbody>
             <tr><td>Beginning pool balance</td><td>$10,000M</td></tr>
             <tr><td>Balance newly entering 90+ DPD</td><td>$123M</td></tr>
